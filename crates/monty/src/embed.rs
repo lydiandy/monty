@@ -37,6 +37,8 @@ pub const KIND_CX: u16 = 3;
 pub const KIND_THEME: u16 = 4;
 /// `cx.theme().colors`.
 pub const KIND_COLORS: u16 = 5;
+/// Nested `@view` handle returned by `cx.new(Class, props)`.
+pub const KIND_VIEW: u16 = 6;
 
 /// Host-owned object: a kind tag plus a host-defined payload word.
 ///
@@ -67,6 +69,8 @@ pub trait HostCtx {
     fn inc_ref(&mut self, id: HeapId);
     fn dec_ref(&mut self, id: HeapId);
     fn host_object(&self, id: HeapId) -> Option<HostObject>;
+    /// True when `id` is a class marked `@view` (`__gpui_view__ is True`).
+    fn is_view_class(&self, id: HeapId) -> bool;
 }
 
 /// Embedder callbacks for `HostObject` methods and StandardLib constructors.
@@ -180,23 +184,22 @@ impl Embed {
         })
     }
 
-    /// Scan module globals for the unique class marked `@view`.
+    /// Scan entry-module globals for the unique class marked `@view`.
+    ///
+    /// Classes defined in host modules (`row.py`) and imported into the entry
+    /// (`from row import Row`) still carry `__gpui_view__`, but they are nested
+    /// views, not the application root.
     pub fn find_view_class(&self) -> Result<HeapId, MontyException> {
+        let imported = self.imported_view_classes();
         let mut found = Vec::new();
         for value in &self.globals {
             let Value::Ref(id) = value else {
                 continue;
             };
-            let HeapData::Class(class) = self.heap.get(*id) else {
+            if imported.iter().any(|imported_id| imported_id == id) {
                 continue;
-            };
-            let Some(marker) = class
-                .namespace()
-                .get_by_str("__gpui_view__", &self.heap, &self.executor.interns)
-            else {
-                continue;
-            };
-            if matches!(marker, Value::Bool(true)) {
+            }
+            if class_is_view(&self.heap, &self.executor.interns, *id) {
                 found.push(*id);
             }
         }
@@ -209,6 +212,34 @@ impl Embed {
                 "entry file must contain exactly one @view class (found more than one)",
             )),
         }
+    }
+
+    fn imported_view_classes(&self) -> Vec<HeapId> {
+        let mut out = Vec::new();
+        for module_id in self.executor.host_modules.loaded_module_ids() {
+            let HeapData::Module(module) = self.heap.get(module_id) else {
+                continue;
+            };
+            for (_, value) in module.attrs().iter() {
+                let Value::Ref(id) = value else {
+                    continue;
+                };
+                if class_is_view(&self.heap, &self.executor.interns, *id) {
+                    out.push(*id);
+                }
+            }
+        }
+        out
+    }
+
+    /// True when `id` is a class marked `@view`.
+    pub fn is_view_class(&self, id: HeapId) -> bool {
+        class_is_view(&self.heap, &self.executor.interns, id)
+    }
+
+    /// True when `receiver` is an instance whose class defines `name`.
+    pub fn has_method(&self, receiver: HeapId, name: &str) -> bool {
+        instance_has_method(&self.heap, &self.executor.interns, receiver, name)
     }
 
     /// Allocate an instance of `class` without running user `__init__`.
@@ -350,6 +381,33 @@ impl Embed {
     }
 }
 
+fn class_is_view(heap: &Heap, interns: &crate::intern::Interns, id: HeapId) -> bool {
+    let HeapData::Class(class) = heap.get(id) else {
+        return false;
+    };
+    matches!(
+        class
+            .namespace()
+            .get_by_str("__gpui_view__", heap, interns),
+        Some(Value::Bool(true))
+    )
+}
+
+fn instance_has_method(
+    heap: &Heap,
+    interns: &crate::intern::Interns,
+    receiver: HeapId,
+    name: &str,
+) -> bool {
+    let HeapData::Instance(instance) = heap.get(receiver) else {
+        return false;
+    };
+    let HeapData::Class(class) = heap.get(instance.class()) else {
+        return false;
+    };
+    class.namespace().get_by_str(name, heap, interns).is_some()
+}
+
 fn lookup_method(vm: &mut VM<'_>, receiver: HeapId, name: &str) -> Result<Value, MontyException> {
     match vm.heap.read(receiver) {
         crate::heap::HeapReadOutput::Instance(instance) => {
@@ -461,6 +519,10 @@ impl HostCtx for VmHostCtx<'_, '_> {
             HeapData::HostObject(obj) => Some(*obj),
             _ => None,
         }
+    }
+
+    fn is_view_class(&self, id: HeapId) -> bool {
+        class_is_view(self.vm.heap, self.vm.interns, id)
     }
 }
 

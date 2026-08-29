@@ -75,6 +75,16 @@ impl HostModuleRegistry {
         self.runtime.borrow().get(name).copied()
     }
 
+    /// Heap ids of host modules whose body has finished running.
+    pub fn loaded_module_ids(&self) -> Vec<HeapId> {
+        self.runtime
+            .borrow()
+            .values()
+            .filter(|rt| rt.loaded)
+            .map(|rt| rt.module_id)
+            .collect()
+    }
+
     pub fn begin_load(&self, name: &str, module_id: HeapId) {
         self.runtime.borrow_mut().insert(
             name.to_owned(),
