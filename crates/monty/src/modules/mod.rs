@@ -33,6 +33,8 @@ pub(crate) mod re;
 pub(crate) mod sys;
 pub(crate) mod typing;
 pub(crate) mod unicodedata;
+pub(crate) mod gpui;
+pub(crate) mod gpui_base;
 
 /// Built-in modules that can be imported.
 #[repr(u8)]
@@ -73,6 +75,11 @@ pub(crate) enum StandardLib {
     /// The `binascii` module providing binary-to-ASCII conversions, CRC32,
     /// and the `Error` class used by `base64`.
     Binascii,
+    /// Host UI runtime module (`from gpui import view`). Provided for
+    /// gpui-monty; production Monty still has no `sys.path`.
+    Gpui,
+    /// Host widget constructors (`from gpui_base import v_flex, Button`).
+    GpuiBase,
     /// The `gc` module exposing a single `collect()` for tests. Only present
     /// under the `test-hooks` feature so production sandboxes never see it.
     ///
@@ -104,6 +111,8 @@ impl StandardLib {
             StaticStrings::Functools => Some(Self::Functools),
             StaticStrings::Base64 => Some(Self::Base64),
             StaticStrings::Binascii => Some(Self::Binascii),
+            StaticStrings::Gpui => Some(Self::Gpui),
+            StaticStrings::GpuiBase => Some(Self::GpuiBase),
             #[cfg(feature = "test-hooks")]
             StaticStrings::Gc => Some(Self::Gc),
             _ => None,
@@ -133,6 +142,8 @@ impl StandardLib {
             Self::Functools => functools::create_module(vm),
             Self::Base64 => base64::create_module(vm),
             Self::Binascii => binascii::create_module(vm),
+            Self::Gpui => gpui::create_module(vm),
+            Self::GpuiBase => gpui_base::create_module(vm),
             #[cfg(feature = "test-hooks")]
             Self::Gc => gc::create_module(vm),
         }
@@ -160,6 +171,8 @@ pub(crate) enum ModuleFunctions {
     Functools(functools::FunctoolsFunctions),
     Base64(base64::Base64Functions),
     Binascii(binascii::BinasciiFunctions),
+    Gpui(gpui::GpuiFunctions),
+    GpuiBase(gpui_base::GpuiBaseFunctions),
     /// `gc` module functions — only present under the `test-hooks` feature.
     /// See [`gc`] for why it is gated; as in [`StandardLib`], the gated block
     /// goes last and new variants are appended ahead of it.
@@ -188,6 +201,8 @@ impl fmt::Display for ModuleFunctions {
             Self::Functools(func) => write!(f, "{func}"),
             Self::Base64(func) => write!(f, "{func}"),
             Self::Binascii(func) => write!(f, "{func}"),
+            Self::Gpui(func) => write!(f, "{func}"),
+            Self::GpuiBase(func) => write!(f, "{func}"),
             #[cfg(feature = "test-hooks")]
             Self::Gc(func) => write!(f, "{func}"),
             #[cfg(feature = "test-hooks")]
@@ -215,6 +230,8 @@ impl ModuleFunctions {
             Self::Functools(functions) => functools::call(vm, functions, args).map(CallResult::Value),
             Self::Base64(functions) => base64::call(vm, functions, args).map(CallResult::Value),
             Self::Binascii(functions) => binascii::call(vm, functions, args).map(CallResult::Value),
+            Self::Gpui(functions) => gpui::call(vm, functions, args).map(CallResult::Value),
+            Self::GpuiBase(functions) => gpui_base::call(vm, functions, args).map(CallResult::Value),
             #[cfg(feature = "test-hooks")]
             Self::Gc(functions) => gc::call(vm, functions, args).map(CallResult::Value),
             #[cfg(feature = "test-hooks")]

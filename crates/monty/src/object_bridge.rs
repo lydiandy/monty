@@ -736,6 +736,8 @@ impl MontyTypeExt for MontyType {
             Type::ReMatch => Self::ReMatch,
             Type::DataclassField => Self::Field,
             Type::DataclassParams => Self::DataclassParams,
+            // Host objects do not cross the MontyObject boundary.
+            Type::HostObject => Self::Object,
         }
     }
 

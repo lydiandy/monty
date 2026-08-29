@@ -758,6 +758,26 @@ impl<'h> VM<'h> {
         )
     }
 
+    /// A VM with no running Python task, so later `evaluate_function` calls
+    /// do not resume a finished module frame.
+    pub fn new_idle(
+        globals: Vec<Value>,
+        code: &'h Code,
+        heap: &'h mut HeapReader<'h>,
+        interns: &'h Interns,
+        print_writer: PrintWriter<'h>,
+        assert_repr_max_bytes: u32,
+    ) -> Self {
+        Self::new_with_frame(
+            globals,
+            CallFrame::new_parked(code),
+            heap,
+            interns,
+            print_writer,
+            assert_repr_max_bytes,
+        )
+    }
+
     /// Creates a VM from its initial frame and runtime context.
     fn new_with_frame(
         globals: Vec<Value>,

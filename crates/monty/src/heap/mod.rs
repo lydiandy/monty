@@ -6,7 +6,7 @@
 #[cfg(feature = "ref-count-return")]
 use std::collections::HashSet;
 use std::{
-    cell::{Cell, UnsafeCell},
+    cell::{Cell, RefCell, UnsafeCell},
     collections::{BTreeMap, HashMap},
     fmt,
     iter::once,
@@ -14,6 +14,7 @@ use std::{
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
     ptr::{self, NonNull},
+    rc::Rc,
     sync::Arc,
 };
 
@@ -884,6 +885,24 @@ impl<'de> serde::Deserialize<'de> for UnsafeHeapData {
     }
 }
 
+
+/// Embedder vtable. Not serialized — a restored dump has no host.
+pub(crate) struct HostVtableSlot(Option<Rc<RefCell<dyn crate::embed::HostVtable>>>);
+
+impl Default for HostVtableSlot {
+    fn default() -> Self {
+        Self(None)
+    }
+}
+
+impl fmt::Debug for HostVtableSlot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("HostVtableSlot")
+            .field(&self.0.as_ref().map(|_| "<host>"))
+            .finish()
+    }
+}
+
 /// Reference-counted arena that backs all heap-only runtime values.
 ///
 /// Uses a free list to reuse slots from freed values, keeping memory usage
@@ -943,6 +962,8 @@ pub(crate) struct Heap {
     ///
     /// Uses `BTreeMap` to avoid large residual capacity from spikes of `ExtFunction` allocations.
     ext_function_cache: BTreeMap<Arc<str>, HeapId>,
+    /// Embedder callbacks for `HostObject`. Not part of a dump.
+    host: HostVtableSlot,
 }
 
 impl serde::Serialize for Heap {
@@ -982,6 +1003,7 @@ impl<'de> serde::Deserialize<'de> for Heap {
             gc_disabled: false,
             timezone_utc: fields.timezone_utc,
             ext_function_cache,
+            host: HostVtableSlot::default(),
         })
     }
 }
@@ -1101,6 +1123,7 @@ impl Heap {
             gc_disabled: false,
             timezone_utc: None,
             ext_function_cache: BTreeMap::new(),
+            host: HostVtableSlot::default(),
         };
 
         // The empty-tuple singleton starts with refcount = 1 — that single ref *is* the
@@ -1120,6 +1143,17 @@ impl Heap {
         debug_assert_eq!(empty_tuple, EMPTY_TUPLE_ID);
         this
     }
+
+    /// Installs the embedder vtable used by `HostObject` dispatch.
+    pub(crate) fn set_host(&mut self, host: Rc<RefCell<dyn crate::embed::HostVtable>>) {
+        self.host = HostVtableSlot(Some(host));
+    }
+
+    /// Clones the embedder vtable, if one is installed.
+    pub(crate) fn host(&self) -> Option<Rc<RefCell<dyn crate::embed::HostVtable>>> {
+        self.host.0.clone()
+    }
+
 
     /// Number of entries in the heap (including freed slots).
     pub fn size(&self) -> usize {

@@ -1121,6 +1121,22 @@ pub enum StaticStrings {
     Tzname,
     /// `timespec` keyword of `time.isoformat()`.
     Timespec,
+
+    // --- gpui-monty embedding (append-only; dump-stable) ---
+    /// `gpui` host module.
+    Gpui,
+    /// `gpui_base` host module.
+    GpuiBase,
+    /// `@view` decorator name.
+    View,
+    /// `v_flex` constructor.
+    VFlex,
+    /// `Button` type exported by `gpui_base`.
+    #[strum(serialize = "Button")]
+    Button,
+    /// Class marker set by `@view`.
+    #[strum(serialize = "__gpui_view__")]
+    GpuiView,
 }
 
 /// Computes an FNV-1a hash over static-string identities and serialization.

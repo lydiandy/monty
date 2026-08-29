@@ -9,6 +9,7 @@ mod builtins;
 mod bytecode;
 mod codecs;
 mod dump_format;
+mod embed;
 mod exception_private;
 mod expressions;
 mod fstring;
@@ -41,7 +42,13 @@ mod value;
 pub use crate::function::FunctionMetadataFault;
 #[cfg(feature = "ref-count-return")]
 pub use crate::run::RefCountOutput;
+pub use crate::embed::{
+    Embed, HostCtx, HostObject, HostValue, HostVtable, KIND_BUTTON_TYPE, KIND_COLORS, KIND_CX,
+    KIND_ELEMENT, KIND_THEME,
+};
+pub use crate::heap::HeapId;
 pub use crate::{
+
     dump_format::{DUMP_VERSION, Dump, DumpError, Session, SessionRef, dump},
     repl::{
         MontyRepl, ReplContinuationMode, ReplFunctionCall, ReplNameLookup, ReplOsCall, ReplProgress,

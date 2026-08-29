@@ -134,6 +134,9 @@ macro_rules! heap_payloads {
             /// Appended here rather than beside `DateTime` because this list is
             /// append-only (see the note above).
             Time(inline $crate::types::time::Time),
+            /// Host-owned object (gpui-monty element handles, `cx`, theme, …).
+            /// One payload with a host vtable, not one variant per widget.
+            HostObject(inline $crate::embed::HostObject),
         }
     };
 }
@@ -229,7 +232,8 @@ impl HeapData {
             | Self::DateTime(_)
             | Self::Time(_)
             | Self::TimeDelta(_)
-            | Self::TimeZone(_) => false,
+            | Self::TimeZone(_)
+            | Self::HostObject(_) => false,
         }
     }
 
@@ -301,6 +305,7 @@ impl HeapData {
             Self::SetIterator(_) => Type::SetIterator,
             Self::CallableIterator(_) => Type::CallableIterator,
             Self::Itertools(i) => i.py_type(),
+            Self::HostObject(_) => Type::HostObject,
         }
     }
 }
@@ -486,6 +491,7 @@ macro_rules! heap_read_output_py_trait_forward {
             Self::Time($value) => $body,
             Self::TimeDelta($value) => $body,
             Self::TimeZone($value) => $body,
+            Self::HostObject($value) => $body,
             Self::Closure(_)
             | Self::FunctionDefaults(_)
             | Self::ExtFunction(_)
@@ -973,7 +979,8 @@ impl<'h> PyTrait<'h> for HeapReadOutput<'h> {
             | Self::Module(_)
             | Self::Coroutine(_)
             | Self::GatherFuture(_)
-            | Self::ExternalFuture(_) => Err(ExcType::type_error_not_iterable(
+            | Self::ExternalFuture(_)
+            | Self::HostObject(_) => Err(ExcType::type_error_not_iterable(
                 &self.py_type(vm).name(vm.heap, vm.interns),
             )),
         }

@@ -213,6 +213,9 @@ pub enum Type {
     Object,
     #[strum(serialize = "datetime.time")]
     Time,
+    /// Host object allocated by an embedder (gpui-monty).
+    #[strum(serialize = "gpui.Object")]
+    HostObject,
 }
 
 /// Writes the canonical static name of every non-[`Instance`](Type::Instance)
