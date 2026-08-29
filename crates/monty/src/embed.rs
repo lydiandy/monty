@@ -92,6 +92,16 @@ pub trait HostVtable: 'static {
         name: &str,
         args: Vec<HostValue>,
     ) -> Result<HostValue, String>;
+
+    /// A call the host wants the VM to run *after* `call_attr` returns.
+    ///
+    /// Used for `.hover(fn)` / `.active(fn)` / `.focus(fn)`: the host opens a
+    /// detached style node, then the user callable must run without the host
+    /// `RefCell` still borrowed (the callable's own `.bg(...)` re-enters
+    /// `call_attr`). Default: nothing pending.
+    fn take_pending_call(&mut self) -> Option<(HeapId, Vec<HostValue>)> {
+        None
+    }
 }
 
 /// Persistent VM session after loading an application module.
@@ -332,7 +342,19 @@ pub(crate) fn dispatch_call_attr(
         .borrow_mut()
         .call_attr(&mut ctx, id, obj, attr, host_args)
         .map_err(|msg| SimpleException::new_msg(ExcType::RuntimeError, msg))?;
-    Ok(CallResult::Value(host_value_to_value(ctx.vm, result)))
+    let pending = host.borrow_mut().take_pending_call();
+    let value = host_value_to_value(ctx.vm, result);
+    if let Some((callable, args)) = pending {
+        let func = Value::Ref(callable);
+        let arg_values = host_values_to_args(ctx.vm, args).map_err(run_err_from_monty)?;
+        let nested = ctx
+            .vm
+            .evaluate_function("<host-callback>", &func, arg_values)
+            .map_err(|e| e.into_python_exception(ctx.vm.interns, |_| Some("")))?;
+        nested.drop_with(ctx.vm);
+        func.drop_with(ctx.vm);
+    }
+    Ok(CallResult::Value(value))
 }
 
 pub(crate) fn dispatch_getattr(
@@ -461,6 +483,10 @@ fn host_values_to_args(vm: &mut VM<'_>, args: Vec<HostValue>) -> Result<ArgValue
 
 fn run_err_to_monty(err: RunError) -> MontyException {
     MontyException::runtime_error(format!("{err:?}"))
+}
+
+fn run_err_from_monty(err: MontyException) -> RunError {
+    SimpleException::new_msg(ExcType::RuntimeError, err.to_string()).into()
 }
 
 impl<'h> PyTrait<'h> for HeapObjectRead<'h, HostObject> {
