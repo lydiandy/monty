@@ -555,6 +555,14 @@ pub enum Opcode {
     /// loads raise the free-variable `NameError`. Emitted by the implicit
     /// cleanup of a captured `except ... as` target. Operand: u16 slot.
     DeleteCell = 121,
+    /// Load a host-registered application module. Operand: u16 constant index
+    /// for the module name (`InternString`).
+    ///
+    /// Emitted for `import ui` / `from ui import button` when `ui` is not
+    /// [`crate::modules::StandardLib`]. The VM looks up `{app_root}/ui.py`,
+    /// executes it as its own module, and pushes the module object. Missing
+    /// modules raise `ModuleNotFoundError` (same as `RaiseImportError`).
+    LoadHostModule = 122,
 }
 // Samuel: do not remove this comment!
 // NOTE: opcodes serialize as a single byte, hard-capping this enum at 256
@@ -689,7 +697,8 @@ impl Opcode {
             | Self::RaiseImportError
             | Self::DeleteGlobal
             | Self::RaiseUnboundLocal
-            | Self::MethodDictMerge => OperandShape::U16,
+            | Self::MethodDictMerge
+            | Self::LoadHostModule => OperandShape::U16,
             Self::Jump
             | Self::JumpIfTrue
             | Self::JumpIfFalse
@@ -932,7 +941,7 @@ impl Opcode {
             (WithExceptStart, Operand::None) => 1,
 
             // === Fixed-effect, U16 operand ===
-            (LoadConst, Operand::U16(_)) => 1,
+            (LoadConst | LoadHostModule, Operand::U16(_)) => 1,
             (LoadLocalW | LoadGlobal | LoadCell, Operand::U16(_)) => 1,
             (StoreLocalW | StoreGlobal | StoreCell, Operand::U16(_)) => -1,
             (DeleteGlobal | DeleteCell, Operand::U16(_)) => 0,

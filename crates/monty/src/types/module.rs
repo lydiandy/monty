@@ -5,7 +5,10 @@ use crate::{
     bytecode::{CallResult, VM},
     defer_drop,
     exception_private::{ExcType, ExcTypeExt, RunResult},
-    heap::{DropGuard, HeapId, HeapItem, HeapRead},
+    heap::{
+        BorrowedHeapReadMut, DropGuard, HeapId, HeapItem, HeapRead,
+        heap_read_ref_as_field_mut,
+    },
     intern::StringId,
     types::Dict,
     value::{EitherStr, Value},
@@ -74,6 +77,20 @@ impl Module {
 }
 
 impl<'h> HeapRead<'h, Module> {
+    fn attrs_mut(&mut self) -> BorrowedHeapReadMut<'_, 'h, Dict> {
+        heap_read_ref_as_field_mut!(self, Module, attrs)
+    }
+
+    /// Sets a module attribute, dropping any previous value.
+    pub fn set_attr(&mut self, name: impl Into<crate::intern::StringId>, value: Value, vm: &mut VM<'h>) {
+        let key = Value::InternString(name.into());
+        match self.attrs_mut().set(key, value, vm) {
+            Ok(Some(old)) => old.drop_with(vm),
+            Ok(None) => {}
+            Err(_) => {}
+        }
+    }
+
     /// Gets an attribute by string ID for the `py_getattr` trait method.
     ///
     /// Returns the attribute value if found, or `None` if the attribute doesn't exist.

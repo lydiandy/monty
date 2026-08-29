@@ -16,6 +16,7 @@ mod fstring;
 mod function;
 mod hash;
 mod heap_data;
+mod host_modules;
 mod identity;
 mod intern;
 mod modules;
@@ -43,8 +44,8 @@ pub use crate::function::FunctionMetadataFault;
 #[cfg(feature = "ref-count-return")]
 pub use crate::run::RefCountOutput;
 pub use crate::embed::{
-    Embed, HostCtx, HostObject, HostValue, HostVtable, KIND_BUTTON_TYPE, KIND_COLORS, KIND_CX,
-    KIND_ELEMENT, KIND_THEME,
+    Embed, HostCtx, HostModuleSource, HostObject, HostValue, HostVtable, KIND_BUTTON_TYPE,
+    KIND_COLORS, KIND_CX, KIND_ELEMENT, KIND_THEME,
 };
 pub use crate::heap::HeapId;
 pub use crate::{

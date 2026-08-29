@@ -12,6 +12,7 @@ use crate::{
     bytecode::{Code, CodeBuilder, Compiler, FrameExit, Opcode, VM},
     exception_private::{ExcTypeExt, RunResult},
     heap::{DropWithContext, Heap, HeapReader},
+    host_modules::{HostModuleRegistry, HostModuleSource, HostModuleSpec},
     intern::{InternerBuilder, Interns, StringId},
     name_map::NameMap,
     namespace::NamespaceId,
@@ -208,6 +209,9 @@ pub(crate) struct Executor {
     /// Estimated heap capacity for pre-allocation on subsequent runs.
     /// Uses AtomicUsize for thread-safety (required by PyO3's Sync bound).
     heap_capacity: AtomicUsize,
+    /// Compiled app-dir modules (`from ui import button`). Not dumped.
+    #[serde(skip)]
+    pub(crate) host_modules: HostModuleRegistry,
 }
 
 impl Clone for Executor {
@@ -220,6 +224,7 @@ impl Clone for Executor {
             input_slots: self.input_slots.clone(),
             assert_repr_max_bytes: self.assert_repr_max_bytes,
             heap_capacity: AtomicUsize::new(self.heap_capacity.load(Ordering::Relaxed)),
+            host_modules: self.host_modules.clone(),
         }
     }
 }
@@ -232,21 +237,90 @@ impl Executor {
         input_names: Vec<String>,
         options: CompileOptions,
     ) -> Result<Self, MontyException> {
-        check_identifier(&input_names)?;
-        let parse_result = parse(&code, script_name).map_err(|e| e.into_python_exc(script_name, &code))?;
-        let prepared = prepare(parse_result, input_names).map_err(|e| e.into_python_exc(script_name, &code))?;
+        Self::new_with_host_modules(code, script_name, input_names, options, Vec::new())
+    }
 
-        // Create interns with empty functions (functions will be set after compilation)
+    /// Compile the entry module together with host app-dir modules, sharing one
+    /// intern pool and one function table so `from ui import button` can load
+    /// `ui.py` as top-level module `ui`.
+    pub(crate) fn new_with_host_modules(
+        code: String,
+        script_name: &str,
+        input_names: Vec<String>,
+        options: CompileOptions,
+        extra: Vec<HostModuleSource>,
+    ) -> Result<Self, MontyException> {
+        check_identifier(&input_names)?;
+        let parsed_entry = parse(&code, script_name).map_err(|e| e.into_python_exc(script_name, &code))?;
+        let mut interner = parsed_entry.interner;
+        let entry_nodes = parsed_entry.nodes;
+
+        let mut extra_asts = Vec::new();
+        for module in extra {
+            interner.intern(&module.name);
+            let parsed = parse_with_interner(&module.source, &module.filename, interner)
+                .map_err(|e| e.into_python_exc(&module.filename, &module.source))?;
+            extra_asts.push((module, parsed.nodes));
+            interner = parsed.interner;
+        }
+
+        let mut extra_prepared = Vec::new();
+        for (module, nodes) in extra_asts {
+            let filename = module.filename.clone();
+            let source = module.source.clone();
+            let prepared = prepare_with_existing_names(
+                crate::parse::ParseResult { nodes, interner },
+                NameMap::default(),
+            )
+            .map_err(|e| e.into_python_exc(&filename, &source))?;
+            interner = prepared.interner;
+            extra_prepared.push((module, prepared.globals, prepared.nodes));
+        }
+
+        let prepared = prepare(
+            crate::parse::ParseResult {
+                nodes: entry_nodes,
+                interner,
+            },
+            input_names,
+        )
+        .map_err(|e| e.into_python_exc(script_name, &code))?;
         let mut interns = Interns::new(prepared.interner, Vec::new());
 
-        // Compile the module to bytecode, which also compiles all nested functions.
-        // The compiler enforces the bytecode-format namespace-size limit and reports
-        // it as a `SyntaxError` rather than panicking on the `u16` cast.
-        let namespace_size = prepared.globals.len();
-        let compile_result = Compiler::compile_module(&prepared.nodes, &interns, &prepared.globals, options)
-            .map_err(|e| e.into_python_exc(script_name, &code))?;
+        let mut functions = Vec::new();
+        let mut host_specs = std::collections::HashMap::new();
+        for (module, globals, nodes) in extra_prepared {
+            let start = u32::try_from(functions.len()).unwrap_or(u32::MAX);
+            let compile_result = Compiler::compile_module_with_functions(
+                &nodes,
+                &interns,
+                &globals,
+                functions,
+                options,
+            )
+            .map_err(|e| e.into_python_exc(&module.filename, &module.source))?;
+            functions = compile_result.functions;
+            let end = u32::try_from(functions.len()).unwrap_or(u32::MAX);
+            host_specs.insert(
+                module.name,
+                HostModuleSpec {
+                    code: Arc::new(compile_result.code),
+                    names: globals,
+                    func_start: start,
+                    func_end: end,
+                },
+            );
+        }
 
-        // Set the compiled functions in the interns
+        let namespace_size = prepared.globals.len();
+        let compile_result = Compiler::compile_module_with_functions(
+            &prepared.nodes,
+            &interns,
+            &prepared.globals,
+            functions,
+            options,
+        )
+        .map_err(|e| e.into_python_exc(script_name, &code))?;
         interns.set_functions(compile_result.functions);
 
         Ok(Self {
@@ -257,6 +331,7 @@ impl Executor {
             input_slots: Vec::new(),
             assert_repr_max_bytes: options.assert_message_annotations.max_bytes(),
             heap_capacity: AtomicUsize::new(namespace_size),
+            host_modules: HostModuleRegistry::new(host_specs),
         })
     }
 
@@ -330,6 +405,7 @@ impl Executor {
             input_slots,
             assert_repr_max_bytes: options.assert_message_annotations.max_bytes(),
             heap_capacity: AtomicUsize::new(0),
+            host_modules: HostModuleRegistry::default(),
         })
     }
 
@@ -396,6 +472,7 @@ impl Executor {
             input_slots: vec![args_slot],
             assert_repr_max_bytes: options.assert_message_annotations.max_bytes(),
             heap_capacity: AtomicUsize::new(0),
+            host_modules: HostModuleRegistry::default(),
         })
     }
 

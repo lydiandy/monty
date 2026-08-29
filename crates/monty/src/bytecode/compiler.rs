@@ -540,6 +540,7 @@ impl<'a> Compiler<'a> {
     /// Returns the compiled module Code and all compiled Functions, or a compile
     /// error if limits were exceeded. The module implicitly returns the value
     /// of the last expression, or None if empty.
+    #[allow(dead_code)]
     pub fn compile_module(
         nodes: &[PreparedNode],
         interns: &Interns,
@@ -1105,14 +1106,14 @@ impl<'a> Compiler<'a> {
         if let Some(builtin_module) = StandardLib::from_string_id(module_name) {
             // Known module - emit LoadModule
             self.code.emit_u8(Opcode::LoadModule, builtin_module as u8)?;
-            // Store to the binding (respects Local/Global/Cell scope)
-            self.compile_store(binding)?;
         } else {
-            // Unknown module - defer error to runtime with RaiseImportError
-            // This allows TYPE_CHECKING imports to compile without error
+            // Host / unknown module: LoadHostModule so `import ui` can resolve
+            // `{app_root}/ui.py`. Missing modules still raise ModuleNotFoundError
+            // at runtime (TYPE_CHECKING branches that never run stay silent).
             let name_const = self.code.add_const(Value::InternString(module_name))?;
-            self.code.emit_u16(Opcode::RaiseImportError, name_const)?;
+            self.code.emit_u16(Opcode::LoadHostModule, name_const)?;
         }
+        self.compile_store(binding)?;
         Ok(())
     }
 
@@ -1132,28 +1133,28 @@ impl<'a> Compiler<'a> {
 
         // Look up the module
         if let Some(builtin_module) = StandardLib::from_string_id(module_name) {
-            // Known module - emit LoadModule
             self.code.emit_u8(Opcode::LoadModule, builtin_module as u8)?;
-
-            // For each name to import
-            for (i, (import_name, binding)) in names.iter().enumerate() {
-                // Dup the module if this isn't the last import (last one consumes the module)
-                if i < names.len() - 1 {
-                    self.code.emit(Opcode::Dup)?;
-                }
-
-                // Load the attribute from the module (raises ImportError if not found)
-                let name_idx = check_name_index_u16(*import_name, position)?;
-                self.code.emit_u16(Opcode::LoadAttrImport, name_idx)?;
-
-                // Store to the binding
-                self.compile_store(binding)?;
-            }
         } else {
-            // Unknown module - defer error to runtime with RaiseImportError
-            // This allows TYPE_CHECKING imports to compile without error
+            // Same LoadAttrImport path as StandardLib, after the host module is
+            // on the stack. Previously this branch only emitted RaiseImportError
+            // and `from ui import button` never reached LoadAttr.
             let name_const = self.code.add_const(Value::InternString(module_name))?;
-            self.code.emit_u16(Opcode::RaiseImportError, name_const)?;
+            self.code.emit_u16(Opcode::LoadHostModule, name_const)?;
+        }
+
+        // For each name to import
+        for (i, (import_name, binding)) in names.iter().enumerate() {
+            // Dup the module if this isn't the last import (last one consumes the module)
+            if i < names.len() - 1 {
+                self.code.emit(Opcode::Dup)?;
+            }
+
+            // Load the attribute from the module (raises ImportError if not found)
+            let name_idx = check_name_index_u16(*import_name, position)?;
+            self.code.emit_u16(Opcode::LoadAttrImport, name_idx)?;
+
+            // Store to the binding
+            self.compile_store(binding)?;
         }
         Ok(())
     }

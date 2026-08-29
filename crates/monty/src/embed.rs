@@ -25,6 +25,8 @@ use crate::{
     value::Value,
 };
 
+pub use crate::host_modules::HostModuleSource;
+
 /// Element handle recorded into a spec arena.
 pub const KIND_ELEMENT: u16 = 1;
 /// `Button` type object (`Button.new(...)`).
@@ -119,7 +121,25 @@ impl Embed {
         script_name: &str,
         host: Rc<RefCell<dyn HostVtable>>,
     ) -> Result<Self, MontyException> {
-        let executor = Executor::new(source, script_name, Vec::new(), CompileOptions::default())?;
+        Self::run_source_with_modules(source, script_name, Vec::new(), host)
+    }
+
+    /// Compile `source` together with host app-dir modules.
+    ///
+    /// `extra` entries are top-level modules: name `"ui"` loads as `from ui import …`.
+    pub fn run_source_with_modules(
+        source: String,
+        script_name: &str,
+        extra: Vec<HostModuleSource>,
+        host: Rc<RefCell<dyn HostVtable>>,
+    ) -> Result<Self, MontyException> {
+        let executor = Executor::new_with_host_modules(
+            source,
+            script_name,
+            Vec::new(),
+            CompileOptions::default(),
+            extra,
+        )?;
         let mut heap = Heap::new(executor.namespace_size(), ResourceTracker::default());
         heap.set_host(host);
         let globals = executor.empty_globals();
@@ -130,6 +150,34 @@ impl Embed {
         };
         embed.run_module()?;
         Ok(embed)
+    }
+
+    /// Call a module-global function by name.
+    pub fn call_global(
+        &mut self,
+        name: &str,
+        args: Vec<HostValue>,
+    ) -> Result<HostValue, MontyException> {
+        let name_id = self
+            .executor
+            .interns
+            .get_string_id_by_name(name)
+            .ok_or_else(|| MontyException::runtime_error(format!("no global {name}")))?;
+        let slot = self
+            .executor
+            .globals
+            .get(name_id)
+            .ok_or_else(|| MontyException::runtime_error(format!("no global {name}")))?
+            .index();
+        self.with_idle_vm(move |vm| {
+            let func = vm.globals[slot].clone_with_heap(vm);
+            let arg_values = host_values_to_args(vm, args)?;
+            let result = vm
+                .evaluate_function("call_global", &func, arg_values)
+                .map_err(|e| e.into_python_exception(vm.interns, |_| Some("")))?;
+            func.drop_with(vm);
+            value_to_host(vm, result).map_err(run_err_to_monty)
+        })
     }
 
     /// Scan module globals for the unique class marked `@view`.
@@ -263,6 +311,7 @@ impl Embed {
                 PrintWriter::Disabled,
                 executor.assert_repr_max_bytes,
             );
+            vm.set_host_modules(&executor.host_modules);
             let result = executor
                 .run_to_completion(&mut vm)
                 .map(|_| ())
@@ -291,6 +340,7 @@ impl Embed {
                 PrintWriter::Disabled,
                 executor.assert_repr_max_bytes,
             );
+            vm.set_host_modules(&executor.host_modules);
             let result = f(&mut vm);
             *slot = Some(vm.take_globals());
             result
@@ -530,5 +580,85 @@ impl<'h> PyTrait<'h> for HeapObjectRead<'h, HostObject> {
             },
             _ => None,
         })
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::embed::HostVtable;
+
+    struct NoHost;
+
+    impl HostVtable for NoHost {
+        fn call_attr(
+            &mut self,
+            _ctx: &mut dyn HostCtx,
+            _id: HeapId,
+            _obj: HostObject,
+            attr: &str,
+            _args: Vec<HostValue>,
+        ) -> Result<HostValue, String> {
+            Err(format!("no host method {attr}"))
+        }
+
+        fn getattr(
+            &mut self,
+            _ctx: &mut dyn HostCtx,
+            _id: HeapId,
+            _obj: HostObject,
+            _attr: &str,
+        ) -> Result<Option<HostValue>, String> {
+            Ok(None)
+        }
+
+        fn construct(
+            &mut self,
+            _ctx: &mut dyn HostCtx,
+            name: &str,
+            _args: Vec<HostValue>,
+        ) -> Result<HostValue, String> {
+            Err(format!("no host constructor {name}"))
+        }
+    }
+
+    #[test]
+    fn from_ui_import_button_loads_host_module() {
+        let extra = vec![HostModuleSource {
+            name: "ui".into(),
+            filename: "ui.py".into(),
+            source: "X = 41\ndef button():\n    return X + 1\n".into(),
+        }];
+        let host: Rc<RefCell<dyn HostVtable>> = Rc::new(RefCell::new(NoHost));
+        let mut embed = Embed::run_source_with_modules(
+            "from ui import button\ndef check():\n    return button()\n".into(),
+            "main.py",
+            extra,
+            host,
+        )
+        .expect("compile/run");
+        match embed.call_global("check", vec![]).expect("check()") {
+            HostValue::Int(42) => {}
+            other => panic!("expected 42, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unknown_host_module_is_module_not_found() {
+        let host: Rc<RefCell<dyn HostVtable>> = Rc::new(RefCell::new(NoHost));
+        let err = match Embed::run_source(
+            "from missing_mod import x\n".into(),
+            "main.py",
+            host,
+        ) {
+            Ok(_) => panic!("missing module should fail"),
+            Err(err) => err,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("missing_mod") || msg.to_lowercase().contains("module"),
+            "unexpected error: {msg}"
+        );
     }
 }

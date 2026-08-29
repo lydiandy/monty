@@ -1137,6 +1137,10 @@ pub enum StaticStrings {
     /// Class marker set by `@view`.
     #[strum(serialize = "__gpui_view__")]
     GpuiView,
+    /// `h_flex` constructor.
+    HFlex,
+    /// `div` constructor.
+    Div,
 }
 
 /// Computes an FNV-1a hash over static-string identities and serialization.

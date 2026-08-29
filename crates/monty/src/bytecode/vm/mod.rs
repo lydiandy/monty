@@ -34,13 +34,14 @@ use crate::{
     exception_private::{ExcType, ExcTypeExt, RunError, RunResult, SimpleException},
     heap::{ContainsHeap, DropWithContext, Heap, HeapData, HeapId, HeapReadOutput, HeapReader},
     heap_data::{CellValue, Closure, FunctionDefaults},
+    host_modules::HostModuleRegistry,
     intern::{FunctionId, Interns, StaticStrings, StringId},
     modules::{StandardLib, json::JsonStringCache, re::RePatternCache},
     object_bridge::MontyObjectExt,
     os_dispatch::{PendingOsEffect, listdir_names, release_pending_effect},
     parse::CodeRange,
     types::{
-        Dict, LongInt, PyTrait,
+        Dict, LongInt, Module, PyTrait,
         file::{apply_buffer_store, apply_write_position},
     },
     value::{EitherStr, Value},
@@ -381,6 +382,16 @@ impl<'code> CallFrame<'code> {
             is_parked: false,
             is_initializer: false,
         }
+    }
+
+    /// Nested host-module body: same as [`Self::new_module`] but parked on the
+    /// current operand stack so the importer's `from ui import button` operands
+    /// survive, and `should_return` so the nested `run()` exits on ReturnValue.
+    fn new_nested_module(code: &'code Code, exception_stack_base: usize, stack_base: usize) -> Self {
+        let mut frame = Self::new_module(code, exception_stack_base);
+        frame.stack_base = stack_base;
+        frame.should_return = true;
+        frame
     }
 
     /// Creates a non-executing frame for a VM with no active Python task.
@@ -736,6 +747,9 @@ pub struct VM<'h> {
     /// UTF-8 byte cap for each operand repr in introspected assert messages.
     /// Supplied by the executor on construction, so it is not snapshotted.
     pub(crate) assert_repr_max_bytes: u32,
+
+    /// Compiled app-dir modules. `None` on the MontyRun/dump path.
+    host_modules: Option<&'h HostModuleRegistry>,
 }
 
 impl<'h> VM<'h> {
@@ -807,7 +821,13 @@ impl<'h> VM<'h> {
             run_reentry_depth: recursion::MAX_RUN_REENTRY_DEPTH,
             re_pattern_cache: RePatternCache::default(),
             assert_repr_max_bytes,
+            host_modules: None,
         }
+    }
+
+    /// Installs the embedder's compiled app-dir modules for `LoadHostModule`.
+    pub(crate) fn set_host_modules(&mut self, host_modules: &'h HostModuleRegistry) {
+        self.host_modules = Some(host_modules);
     }
 
     /// Reconstructs a VM from a snapshot.
@@ -883,6 +903,7 @@ impl<'h> VM<'h> {
             run_reentry_depth: recursion::MAX_RUN_REENTRY_DEPTH,
             re_pattern_cache: RePatternCache::default(),
             assert_repr_max_bytes,
+            host_modules: None,
         }
     }
 
@@ -1821,6 +1842,10 @@ impl<'h> VM<'h> {
                     let module_id = self.current_frame.fetch_u8();
                     self.load_module(module_id);
                 }
+                Opcode::LoadHostModule => {
+                    let const_idx = self.current_frame.fetch_u16();
+                    try_catch!(self, self.load_host_module(const_idx));
+                }
                 Opcode::RaiseImportError => {
                     // Fetch the module name from the constant pool and raise ModuleNotFoundError
                     let const_idx = self.current_frame.fetch_u16();
@@ -1854,6 +1879,132 @@ impl<'h> VM<'h> {
         // Create the module on the heap using pre-interned strings
         let heap_id = module.create(self);
         self.push(Value::Ref(heap_id));
+    }
+
+    /// Loads a host-registered app module (`from ui import button`).
+    fn load_host_module(&mut self, const_idx: u16) -> RunResult<()> {
+        let module_name = self.current_frame.code.constants().get(const_idx);
+        let (name_id, name) = match module_name {
+            Value::InternString(id) => (*id, self.interns.get_str(*id).to_owned()),
+            _ => {
+                return Err(ExcType::module_not_found_error("<unknown>"));
+            }
+        };
+
+        let host_modules = self.host_modules.ok_or_else(|| ExcType::module_not_found_error(&name))?;
+
+        if let Some(rt) = host_modules.cached(&name) {
+            self.heap.inc_ref(rt.module_id);
+            self.push(Value::Ref(rt.module_id));
+            return Ok(());
+        }
+
+        let spec = host_modules
+            .get(&name)
+            .ok_or_else(|| ExcType::module_not_found_error(&name))?;
+        let code: &'h Code = spec.code.as_ref();
+        let names = spec.names.clone();
+        let nglobals = names.len();
+
+        let module_obj = Module::new(name_id);
+        let module_id = self.heap.allocate(HeapData::Module(Box::new(module_obj)));
+        host_modules.begin_load(&name, module_id);
+
+        self.enter_run_reentry().map_err(RunError::from)?;  // ResourceError -> RunError
+        let mut guard = recursion::RunReentryGuard::new(self);
+        let this = &mut *guard;
+
+        let saved_globals = mem::replace(
+            &mut this.globals,
+            (0..nglobals).map(|_| Value::Undefined).collect(),
+        );
+        let frame = CallFrame::new_nested_module(code, this.exception_stack.len(), this.stack.len());
+        if let Err(e) = this.push_frame(frame) {
+            let host_globals = mem::replace(&mut this.globals, saved_globals);
+            for value in host_globals {
+                value.drop_with(this);
+            }
+            return Err(e);
+        }
+
+        let run_result = loop {
+            match this.run() {
+                Ok(FrameExit::Return(v)) => {
+                    v.drop_with(this);
+                    break Ok(());
+                }
+                Ok(exit) => {
+                    let error = this.unsupported_frame_exit("host module", exit);
+                    if let Some(error) = this.handle_exception(error) {
+                        break Err(error);
+                    }
+                }
+                Err(e) => {
+                    if let Some(error) = this.handle_exception(e) {
+                        break Err(error);
+                    }
+                }
+            }
+        };
+
+        match run_result {
+            Ok(()) => {
+                let host_globals = mem::replace(&mut this.globals, saved_globals);
+                for (slot, attr_name) in names.iter() {
+                    let value = host_globals[slot.index()].clone_with_heap(this);
+                    if matches!(value, Value::Undefined) {
+                        continue;
+                    }
+                    match this.heap.read(module_id) {
+                        HeapReadOutput::Module(mut module) => {
+                            module.set_attr(attr_name, value, this);
+                        }
+                        _ => value.drop_with(this),
+                    }
+                }
+                for value in host_globals {
+                    value.drop_with(this);
+                }
+                host_modules.finish_load(&name);
+                this.heap.inc_ref(module_id);
+                this.push(Value::Ref(module_id));
+                Ok(())
+            }
+            Err(e) => {
+                let host_globals = mem::replace(&mut this.globals, saved_globals);
+                for value in host_globals {
+                    value.drop_with(this);
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// A global belonging to an already-loaded host module function, if any.
+    fn host_function_global(&mut self, slot: u16) -> Option<Value> {
+        let fid = self.current_frame.function_id?;
+        let host_modules = self.host_modules?;
+        let (module_id, spec) = host_modules.loaded_for_function(fid)?;
+        let name_id = spec.names.name_at(slot)?;
+        match self.heap.read(module_id) {
+            HeapReadOutput::Module(module) => match module.py_getattr(&EitherStr::from(name_id), self) {
+                Some(CallResult::Value(v)) => Some(v),
+                other => {
+                    if let Some(result) = other {
+                        result.drop_with(self);
+                    }
+                    None
+                }
+            },
+            _ => None,
+        }
+    }
+
+    fn loaded_host_global_target(&self, slot: u16) -> Option<(HeapId, StringId)> {
+        let fid = self.current_frame.function_id?;
+        let (module_id, spec) = self.host_modules?.loaded_for_function(fid)?;
+        let name_id = spec.names.name_at(slot)?;
+        Some((module_id, name_id))
     }
 
     /// Resumes execution after an external call completes.
@@ -2176,6 +2327,13 @@ impl<'h> VM<'h> {
     /// the name happens to have a module slot allocated (e.g. because the module also
     /// `def`-binds the same name elsewhere) but that slot is currently `Undefined`.
     fn load_global_callable(&mut self, slot: u16, name_id: StringId) {
+        if let Some(value) = self.host_function_global(slot) {
+            if !matches!(value, Value::Undefined) {
+                self.push(value);
+                return;
+            }
+            value.drop_with(self);
+        }
         let value = self.globals[slot as usize].clone_with_heap(self);
 
         if matches!(value, Value::Undefined) {
@@ -2283,6 +2441,14 @@ impl<'h> VM<'h> {
     /// [`builtin_for_name`]) before yielding `NameLookup` so the host can supply
     /// an external binding.
     fn load_global(&mut self, slot: u16) -> Result<Option<FrameExit>, RunError> {
+        if let Some(value) = self.host_function_global(slot) {
+            if matches!(value, Value::Undefined) {
+                value.drop_with(self);
+            } else {
+                self.push(value);
+                return Ok(None);
+            }
+        }
         let value = self.globals[slot as usize].clone_with_heap(self);
 
         // Check for undefined value — raise appropriate error or yield to host
@@ -2328,6 +2494,13 @@ impl<'h> VM<'h> {
     /// check is needed here.
     fn store_global(&mut self, slot: u16) {
         let value = self.pop();
+        if let Some((module_id, name_id)) = self.loaded_host_global_target(slot) {
+            match self.heap.read(module_id) {
+                HeapReadOutput::Module(mut module) => module.set_attr(name_id, value, self),
+                _ => value.drop_with(self),
+            }
+            return;
+        }
         let old_value = mem::replace(&mut self.globals[slot as usize], value);
         old_value.drop_with(self);
     }

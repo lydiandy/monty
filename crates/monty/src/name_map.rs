@@ -174,6 +174,11 @@ impl NameMap {
         Ok(id)
     }
 
+    /// Interned name at `slot`, if the slot exists.
+    pub fn name_at(&self, slot: u16) -> Option<StringId> {
+        self.slots.get(usize::from(slot)).copied()
+    }
+
     /// Iterates over `(slot, name)` pairs in slot order.
     pub fn iter(&self) -> impl ExactSizeIterator<Item = (NamespaceId, StringId)> + '_ {
         self.slots.iter().enumerate().map(|(i, &name)| {
