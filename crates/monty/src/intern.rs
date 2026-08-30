@@ -1308,6 +1308,18 @@ pub enum StaticStrings {
     /// `FocusHandle` type exported by `ui`. 只追加；dump 判别式不动。
     #[strum(serialize = "FocusHandle")]
     FocusHandle,
+    /// `net` host object exported by `ui`. 只追加。
+    Net,
+    /// `scene` constructor exported by `ui`. 只追加；空实现。
+    Scene,
+    /// `node` constructor exported by `ui`. 只追加；空实现。
+    Node,
+    /// `edge` constructor exported by `ui`. 只追加；空实现。
+    Edge,
+    /// `play` constructor exported by `ui`. 只追加；空实现。
+    Play,
+    /// `seq` constructor exported by `ui`. 只追加；空实现。
+    Seq,
 }
 
 /// Computes an FNV-1a hash over static-string identities and serialization.

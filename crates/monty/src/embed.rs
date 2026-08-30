@@ -180,15 +180,21 @@ pub const KIND_CALENDAR_STATE: u16 = 76;
 pub const KIND_SCROLLBAR_TYPE: u16 = 77;
 /// `FocusHandle` type object exported by `ui`. 没有 `.new`；实例是 `cx.focus_handle()`（kind 28）。
 pub const KIND_FOCUS_HANDLE_TYPE: u16 = 78;
+/// `net` host object (`from ui import net`)。
+pub const KIND_NET: u16 = 79;
+/// TCP 套接字实例（`net.connect` 的返回值）。
+pub const KIND_TCP_SOCKET: u16 = 80;
 
-/// KIND 占用（不要改号，只追加）：
-/// - 28 host 实例 `KIND_FOCUS_HANDLE`（`engine.rs`，不在本文件）
-/// - 29 `KIND_PATH_BUILDER_TYPE` fork 类型
-/// - 30 host `KIND_PATH_BUILDER` 可变实例
-/// - 31 host `KIND_PATH` 冻结 path
-/// - 32 `KIND_BACKGROUND_TYPE` fork（任务书曾写 30，以源码为准）
-/// - 33+ 控件 TYPE / STATE，从 NumberInput 起
-/// - 78 `KIND_FOCUS_HANDLE_TYPE` fork 类型（只为 `from ui import FocusHandle`）
+// KIND 占用（不要改号，只追加）：
+// - 28 host 实例 `KIND_FOCUS_HANDLE`（`engine.rs`，不在本文件）
+// - 29 `KIND_PATH_BUILDER_TYPE` fork 类型
+// - 30 host `KIND_PATH_BUILDER` 可变实例
+// - 31 host `KIND_PATH` 冻结 path
+// - 32 `KIND_BACKGROUND_TYPE` fork（任务书曾写 30，以源码为准）
+// - 33+ 控件 TYPE / STATE，从 NumberInput 起
+// - 78 `KIND_FOCUS_HANDLE_TYPE` fork 类型（只为 `from ui import FocusHandle`）
+// - 79 `KIND_NET` fork 对象（`from ui import net`）
+// - 80 host `KIND_TCP_SOCKET` 实例
 
 /// Host-owned object: a kind tag plus a host-defined payload word.
 ///

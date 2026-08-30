@@ -12,7 +12,7 @@ use crate::{
         KIND_ACCORDION_TRIGGER_TYPE, KIND_ACCORDION_TYPE, KIND_AVATAR_FALLBACK_TYPE,
         KIND_AVATAR_IMAGE_TYPE, KIND_AVATAR_TYPE, KIND_BACKGROUND_TYPE, KIND_BUTTON_TYPE,
         KIND_CALENDAR_STATE_TYPE, KIND_CHECKBOX_TYPE, KIND_COLLAPSIBLE_TYPE, KIND_COMBOBOX_TYPE,
-        KIND_DATE_PICKER_TYPE, KIND_DOCK_AREA_TYPE, KIND_FOCUS_HANDLE_TYPE, KIND_FS,
+        KIND_DATE_PICKER_TYPE, KIND_DOCK_AREA_TYPE, KIND_FOCUS_HANDLE_TYPE, KIND_FS, KIND_NET,
         KIND_HOVER_CARD_TYPE, KIND_HTTP,
         KIND_INPUT_STATE_TYPE, KIND_INPUT_TYPE, KIND_LINK_TYPE, KIND_NUMBER_INPUT_TYPE,
         KIND_OTP_INPUT_TYPE, KIND_OTP_STATE_TYPE, KIND_PAGINATION_TYPE, KIND_PATH_BUILDER_TYPE,
@@ -111,6 +111,11 @@ pub fn create_module(vm: &mut VM<'_>) -> HeapId {
         data: 0,
     }));
     module.set_attr(StaticStrings::Websocket, Value::Ref(websocket), vm);
+    let net = vm.heap.allocate(HeapData::HostObject(HostObject {
+        kind: KIND_NET,
+        data: 0,
+    }));
+    module.set_attr(StaticStrings::Net, Value::Ref(net), vm);
 
     module.set_attr(
         StaticStrings::VFlex,
@@ -373,6 +378,41 @@ pub fn create_module(vm: &mut VM<'_>) -> HeapId {
         StaticStrings::ResizablePanel,
         Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
             gpui_base::GpuiBaseFunctions::ResizablePanel,
+        ))),
+        vm,
+    );
+    module.set_attr(
+        StaticStrings::Scene,
+        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
+            gpui_base::GpuiBaseFunctions::Scene,
+        ))),
+        vm,
+    );
+    module.set_attr(
+        StaticStrings::Node,
+        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
+            gpui_base::GpuiBaseFunctions::Node,
+        ))),
+        vm,
+    );
+    module.set_attr(
+        StaticStrings::Edge,
+        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
+            gpui_base::GpuiBaseFunctions::Edge,
+        ))),
+        vm,
+    );
+    module.set_attr(
+        StaticStrings::Play,
+        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
+            gpui_base::GpuiBaseFunctions::Play,
+        ))),
+        vm,
+    );
+    module.set_attr(
+        StaticStrings::Seq,
+        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
+            gpui_base::GpuiBaseFunctions::Seq,
         ))),
         vm,
     );

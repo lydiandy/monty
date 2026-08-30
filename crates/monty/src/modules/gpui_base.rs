@@ -46,6 +46,16 @@ pub(crate) enum GpuiBaseFunctions {
     VResizable,
     #[strum(serialize = "resizable_panel")]
     ResizablePanel,
+    #[strum(serialize = "scene")]
+    Scene,
+    #[strum(serialize = "node")]
+    Node,
+    #[strum(serialize = "edge")]
+    Edge,
+    #[strum(serialize = "play")]
+    Play,
+    #[strum(serialize = "seq")]
+    Seq,
 }
 
 /// Creates the `gpui_base` module.
@@ -184,5 +194,10 @@ pub(crate) fn call(vm: &mut VM<'_>, function: GpuiBaseFunctions, args: ArgValues
             args.check_zero_args("resizable_panel", vm.heap)?;
             embed::dispatch_construct(vm, "resizable_panel", ArgValues::Empty)
         }
+        GpuiBaseFunctions::Scene => embed::dispatch_construct(vm, "scene", args),
+        GpuiBaseFunctions::Node => embed::dispatch_construct(vm, "node", args),
+        GpuiBaseFunctions::Edge => embed::dispatch_construct(vm, "edge", args),
+        GpuiBaseFunctions::Play => embed::dispatch_construct(vm, "play", args),
+        GpuiBaseFunctions::Seq => embed::dispatch_construct(vm, "seq", args),
     }
 }
