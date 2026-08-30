@@ -4,8 +4,9 @@ use crate::{
     args::ArgValues,
     bytecode::VM,
     embed::{
-        self, HostObject, KIND_BUTTON_TYPE, KIND_CHECKBOX_TYPE, KIND_INPUT_STATE_TYPE,
-        KIND_LINK_TYPE, KIND_SWITCH_TYPE,
+        self, HostObject, KIND_BUTTON_TYPE, KIND_CHECKBOX_TYPE, KIND_DOCK_AREA_TYPE,
+        KIND_INPUT_STATE_TYPE, KIND_INPUT_TYPE, KIND_LINK_TYPE, KIND_SWITCH_TYPE,
+        KIND_TEXTAREA_STATE_TYPE, KIND_TEXTAREA_TYPE,
     },
     exception_private::RunResult,
     heap::{HeapData, HeapId},
@@ -24,6 +25,18 @@ pub(crate) enum GpuiBaseFunctions {
     HFlex,
     #[strum(serialize = "div")]
     Div,
+    #[strum(serialize = "svg")]
+    Svg,
+    #[strum(serialize = "image")]
+    Image,
+    #[strum(serialize = "v_virtual_list")]
+    VVirtualList,
+    #[strum(serialize = "h_virtual_list")]
+    HVirtualList,
+    #[strum(serialize = "dock_area")]
+    DockArea,
+    #[strum(serialize = "dock_content")]
+    DockContent,
 }
 
 /// Creates the `gpui_base` module.
@@ -42,6 +55,26 @@ pub fn create_module(vm: &mut VM<'_>) -> HeapId {
     module.set_attr(
         StaticStrings::Div,
         Value::ModuleFunction(ModuleFunctions::GpuiBase(GpuiBaseFunctions::Div)),
+        vm,
+    );
+    module.set_attr(
+        StaticStrings::Svg,
+        Value::ModuleFunction(ModuleFunctions::GpuiBase(GpuiBaseFunctions::Svg)),
+        vm,
+    );
+    module.set_attr(
+        StaticStrings::Image,
+        Value::ModuleFunction(ModuleFunctions::GpuiBase(GpuiBaseFunctions::Image)),
+        vm,
+    );
+    module.set_attr(
+        StaticStrings::VVirtualList,
+        Value::ModuleFunction(ModuleFunctions::GpuiBase(GpuiBaseFunctions::VVirtualList)),
+        vm,
+    );
+    module.set_attr(
+        StaticStrings::HVirtualList,
+        Value::ModuleFunction(ModuleFunctions::GpuiBase(GpuiBaseFunctions::HVirtualList)),
         vm,
     );
     let button_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
@@ -69,6 +102,40 @@ pub fn create_module(vm: &mut VM<'_>) -> HeapId {
         data: 0,
     }));
     module.set_attr(StaticStrings::InputState, Value::Ref(input_state_ty), vm);
+    let textarea_state_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
+        kind: KIND_TEXTAREA_STATE_TYPE,
+        data: 0,
+    }));
+    module.set_attr(
+        StaticStrings::TextareaState,
+        Value::Ref(textarea_state_ty),
+        vm,
+    );
+    let input_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
+        kind: KIND_INPUT_TYPE,
+        data: 0,
+    }));
+    module.set_attr(StaticStrings::Input, Value::Ref(input_ty), vm);
+    let textarea_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
+        kind: KIND_TEXTAREA_TYPE,
+        data: 0,
+    }));
+    module.set_attr(StaticStrings::Textarea, Value::Ref(textarea_ty), vm);
+    module.set_attr(
+        StaticStrings::DockAreaFn,
+        Value::ModuleFunction(ModuleFunctions::GpuiBase(GpuiBaseFunctions::DockArea)),
+        vm,
+    );
+    module.set_attr(
+        StaticStrings::DockContent,
+        Value::ModuleFunction(ModuleFunctions::GpuiBase(GpuiBaseFunctions::DockContent)),
+        vm,
+    );
+    let dock_area_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
+        kind: KIND_DOCK_AREA_TYPE,
+        data: 0,
+    }));
+    module.set_attr(StaticStrings::DockArea, Value::Ref(dock_area_ty), vm);
     vm.heap.allocate(HeapData::Module(Box::new(module)))
 }
 
@@ -85,6 +152,19 @@ pub(super) fn call(vm: &mut VM<'_>, function: GpuiBaseFunctions, args: ArgValues
         GpuiBaseFunctions::Div => {
             args.check_zero_args("div", vm.heap)?;
             embed::dispatch_construct(vm, "div", ArgValues::Empty)
+        }
+        GpuiBaseFunctions::Svg => embed::dispatch_construct(vm, "svg", args),
+        GpuiBaseFunctions::Image => embed::dispatch_construct(vm, "image", args),
+        GpuiBaseFunctions::VVirtualList => {
+            embed::dispatch_construct(vm, "v_virtual_list", args)
+        }
+        GpuiBaseFunctions::HVirtualList => {
+            embed::dispatch_construct(vm, "h_virtual_list", args)
+        }
+        GpuiBaseFunctions::DockArea => embed::dispatch_construct(vm, "dock_area", args),
+        GpuiBaseFunctions::DockContent => {
+            args.check_zero_args("dock_content", vm.heap)?;
+            embed::dispatch_construct(vm, "dock_content", ArgValues::Empty)
         }
     }
 }

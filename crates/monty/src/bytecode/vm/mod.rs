@@ -2318,6 +2318,14 @@ impl<'h> VM<'h> {
         }
     }
 
+    fn in_host_function(&self) -> bool {
+        let Some(fid) = self.current_frame.function_id else {
+            return false;
+        };
+        self.host_modules
+            .is_some_and(|modules| modules.loaded_for_function(fid).is_some())
+    }
+
     /// Loads a global variable in call context, pushing an external function for undefined names.
     ///
     /// Unlike `load_global`, this never yields `NameLookup`. When the variable is undefined,
@@ -2327,12 +2335,29 @@ impl<'h> VM<'h> {
     /// the name happens to have a module slot allocated (e.g. because the module also
     /// `def`-binds the same name elsewhere) but that slot is currently `Undefined`.
     fn load_global_callable(&mut self, slot: u16, name_id: StringId) {
-        if let Some(value) = self.host_function_global(slot) {
-            if !matches!(value, Value::Undefined) {
+        if self.in_host_function() {
+            if let Some(value) = self.host_function_global(slot) {
+                if !matches!(value, Value::Undefined) {
+                    self.push(value);
+                    return;
+                }
+                value.drop_with(self);
+            }
+            // Host functions must not read the caller's globals by slot index:
+            // `ui.str` and `main.Outline` can share a slot. Unbound names go
+            // to builtins (`str`, `id`, …), matching CPython's module globals.
+            if let Some(builtin) = self.builtin_for_name(name_id) {
+                self.push(builtin);
+                return;
+            }
+            if let Some(value) = self.module_dunder(name_id) {
                 self.push(value);
                 return;
             }
-            value.drop_with(self);
+            self.ext_function_load_ip = Some(self.instruction_ip);
+            let function = self.heap.get_ext_function(self.interns.get_str(name_id));
+            self.push(function);
+            return;
         }
         let value = self.globals[slot as usize].clone_with_heap(self);
 
@@ -2441,6 +2466,37 @@ impl<'h> VM<'h> {
     /// [`builtin_for_name`]) before yielding `NameLookup` so the host can supply
     /// an external binding.
     fn load_global(&mut self, slot: u16) -> Result<Option<FrameExit>, RunError> {
+        if self.in_host_function() {
+            if let Some(value) = self.host_function_global(slot) {
+                if matches!(value, Value::Undefined) {
+                    value.drop_with(self);
+                } else {
+                    self.push(value);
+                    return Ok(None);
+                }
+            }
+            let name_id = self.current_frame.function_id.and_then(|fid| {
+                self.host_modules
+                    .and_then(|modules| modules.loaded_for_function(fid))
+                    .and_then(|(_, spec)| spec.names.name_at(slot))
+            });
+            let Some(name_id) = name_id else {
+                return Err(self.name_error(slot, None));
+            };
+            if let Some(builtin) = self.builtin_for_name(name_id) {
+                self.push(builtin);
+                return Ok(None);
+            }
+            if let Some(value) = self.module_dunder(name_id) {
+                self.push(value);
+                return Ok(None);
+            }
+            return Ok(Some(FrameExit::NameLookup {
+                name_id,
+                namespace_slot: slot,
+                is_global: true,
+            }));
+        }
         if let Some(value) = self.host_function_global(slot) {
             if matches!(value, Value::Undefined) {
                 value.drop_with(self);

@@ -9,6 +9,9 @@ use crate::{
     bytecode::VM,
     exception_private::{ExcType, ExcTypeExt, RunResult},
     heap::{HeapData, HeapId, HeapReadOutput},
+    embed::{
+        HostObject, KIND_FS, KIND_HTTP, KIND_PROCESS, KIND_STORAGE, KIND_WEBSOCKET, KIND_WINDOW,
+    },
     intern::StaticStrings,
     modules::ModuleFunctions,
     types::{Module, PyTrait},
@@ -30,6 +33,45 @@ pub fn create_module(vm: &mut VM<'_>) -> HeapId {
         Value::ModuleFunction(ModuleFunctions::Gpui(GpuiFunctions::View)),
         vm,
     );
+    let window = vm.heap.allocate(HeapData::HostObject(HostObject {
+        kind: KIND_WINDOW,
+        data: 0,
+    }));
+    module.set_attr(StaticStrings::Window, Value::Ref(window), vm);
+    let local_storage = vm.heap.allocate(HeapData::HostObject(HostObject {
+        kind: KIND_STORAGE,
+        data: 0,
+    }));
+    module.set_attr(StaticStrings::LocalStorage, Value::Ref(local_storage), vm);
+    let session_storage = vm.heap.allocate(HeapData::HostObject(HostObject {
+        kind: KIND_STORAGE,
+        data: 1,
+    }));
+    module.set_attr(
+        StaticStrings::SessionStorage,
+        Value::Ref(session_storage),
+        vm,
+    );
+    let fs = vm.heap.allocate(HeapData::HostObject(HostObject {
+        kind: KIND_FS,
+        data: 0,
+    }));
+    module.set_attr(StaticStrings::Fs, Value::Ref(fs), vm);
+    let process = vm.heap.allocate(HeapData::HostObject(HostObject {
+        kind: KIND_PROCESS,
+        data: 0,
+    }));
+    module.set_attr(StaticStrings::Process, Value::Ref(process), vm);
+    let http = vm.heap.allocate(HeapData::HostObject(HostObject {
+        kind: KIND_HTTP,
+        data: 0,
+    }));
+    module.set_attr(StaticStrings::Http, Value::Ref(http), vm);
+    let websocket = vm.heap.allocate(HeapData::HostObject(HostObject {
+        kind: KIND_WEBSOCKET,
+        data: 0,
+    }));
+    module.set_attr(StaticStrings::Websocket, Value::Ref(websocket), vm);
     vm.heap.allocate(HeapData::Module(Box::new(module)))
 }
 

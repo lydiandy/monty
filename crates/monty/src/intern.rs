@@ -1150,9 +1150,54 @@ pub enum StaticStrings {
     /// `Link` type exported by `gpui_base`.
     #[strum(serialize = "Link")]
     Link,
-    /// `InputState` type exported by `gpui_base` (stub until retained entity).
+    /// `InputState` type exported by `gpui_base`.
     #[strum(serialize = "InputState")]
     InputState,
+    /// `TextareaState` type exported by `gpui_base`.
+    #[strum(serialize = "TextareaState")]
+    TextareaState,
+    /// `Input` type exported by `gpui_base`.
+    #[strum(serialize = "Input")]
+    Input,
+    /// `Textarea` type exported by `gpui_base`.
+    #[strum(serialize = "Textarea")]
+    Textarea,
+    /// Ambient `window` overlay host exported by `gpui`.
+    #[strum(serialize = "window")]
+    Window,
+    /// `svg` constructor exported by `gpui_base`.
+    #[strum(serialize = "svg")]
+    Svg,
+    /// `image` constructor exported by `gpui_base`.
+    #[strum(serialize = "image")]
+    Image,
+    /// Ambient `localStorage` exported by `gpui`.
+    #[strum(serialize = "localStorage")]
+    LocalStorage,
+    /// Ambient `sessionStorage` exported by `gpui`.
+    #[strum(serialize = "sessionStorage")]
+    SessionStorage,
+    /// `v_virtual_list` constructor exported by `gpui_base`.
+    VVirtualList,
+    /// `h_virtual_list` constructor exported by `gpui_base`.
+    HVirtualList,
+    /// `fs` host object exported by `gpui`.
+    Fs,
+    /// `process` host object exported by `gpui`.
+    Process,
+    /// `http` host object exported by `gpui`.
+    Http,
+    /// `websocket` host object exported by `gpui`.
+    Websocket,
+    /// `DockArea` type exported by `gpui_base`.
+    #[strum(serialize = "DockArea")]
+    DockArea,
+    /// `dock_area` constructor exported by `gpui_base`.
+    #[strum(serialize = "dock_area")]
+    DockAreaFn,
+    /// `dock_content` constructor exported by `gpui_base`.
+    #[strum(serialize = "dock_content")]
+    DockContent,
 }
 
 /// Computes an FNV-1a hash over static-string identities and serialization.
