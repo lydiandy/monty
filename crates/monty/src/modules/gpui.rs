@@ -1,4 +1,5 @@
-//! Host UI runtime module (`from gpui import view`).
+//! Former `gpui` runtime module. Kept so dump `ModuleFunctions::Gpui` still
+//! decodes. Scripts import `ui` (`from ui import view`).
 //!
 //! `@view` marks a class as the application entry. Monty has no user-class
 //! `__getattr__` and no inheritance, so the decorator sets `__gpui_view__`
@@ -75,7 +76,7 @@ pub fn create_module(vm: &mut VM<'_>) -> HeapId {
     vm.heap.allocate(HeapData::Module(Box::new(module)))
 }
 
-pub(super) fn call(vm: &mut VM<'_>, function: GpuiFunctions, args: ArgValues) -> RunResult<Value> {
+pub(crate) fn call(vm: &mut VM<'_>, function: GpuiFunctions, args: ArgValues) -> RunResult<Value> {
     match function {
         GpuiFunctions::View => view(vm, args),
     }

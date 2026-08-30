@@ -1,4 +1,4 @@
-//! Host-registered application modules (`from ui import button`).
+//! Host-registered application modules (`from widgets import button`).
 //!
 //! Monty's compiler only `LoadModule`s [`crate::modules::StandardLib`]. Unknown
 //! names used to become `RaiseImportError` with no `LoadAttr`. Embedders register
@@ -15,10 +15,10 @@ use crate::{
     name_map::NameMap,
 };
 
-/// Source for one top-level host module (`ui.py` → name `"ui"`).
+/// Source for one top-level host module (`widgets.py` → name `"widgets"`).
 #[derive(Debug, Clone)]
 pub struct HostModuleSource {
-    /// Import name (`ui` in `from ui import button`).
+    /// Import name (`widgets` in `from widgets import button`).
     pub name: String,
     /// Path used in tracebacks.
     pub filename: String,

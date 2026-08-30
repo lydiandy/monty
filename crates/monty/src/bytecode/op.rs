@@ -558,10 +558,11 @@ pub enum Opcode {
     /// Load a host-registered application module. Operand: u16 constant index
     /// for the module name (`InternString`).
     ///
-    /// Emitted for `import ui` / `from ui import button` when `ui` is not
-    /// [`crate::modules::StandardLib`]. The VM looks up `{app_root}/ui.py`,
-    /// executes it as its own module, and pushes the module object. Missing
-    /// modules raise `ModuleNotFoundError` (same as `RaiseImportError`).
+    /// Emitted for `import widgets` / `from widgets import button` when
+    /// `widgets` is not [`crate::modules::StandardLib`]. The VM looks up
+    /// `{app_root}/widgets.py`, executes it as its own module, and pushes the
+    /// module object. Missing modules raise `ModuleNotFoundError` (same as
+    /// `RaiseImportError`).
     LoadHostModule = 122,
 }
 // Samuel: do not remove this comment!

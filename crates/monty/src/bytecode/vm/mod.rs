@@ -385,7 +385,7 @@ impl<'code> CallFrame<'code> {
     }
 
     /// Nested host-module body: same as [`Self::new_module`] but parked on the
-    /// current operand stack so the importer's `from ui import button` operands
+    /// current operand stack so the importer's `from widgets import button` operands
     /// survive, and `should_return` so the nested `run()` exits on ReturnValue.
     fn new_nested_module(code: &'code Code, exception_stack_base: usize, stack_base: usize) -> Self {
         let mut frame = Self::new_module(code, exception_stack_base);
@@ -1881,7 +1881,7 @@ impl<'h> VM<'h> {
         self.push(Value::Ref(heap_id));
     }
 
-    /// Loads a host-registered app module (`from ui import button`).
+    /// Loads a host-registered app module (`from widgets import button`).
     fn load_host_module(&mut self, const_idx: u16) -> RunResult<()> {
         let module_name = self.current_frame.code.constants().get(const_idx);
         let (name_id, name) = match module_name {

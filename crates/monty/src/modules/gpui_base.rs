@@ -1,4 +1,5 @@
-//! Host widget constructors (`from gpui_base import v_flex, h_flex, Button`).
+//! Former `gpui_base` widget constructors. Kept so dump
+//! `ModuleFunctions::GpuiBase` still decodes. Scripts import `ui`.
 
 use crate::{
     args::ArgValues,
@@ -139,7 +140,7 @@ pub fn create_module(vm: &mut VM<'_>) -> HeapId {
     vm.heap.allocate(HeapData::Module(Box::new(module)))
 }
 
-pub(super) fn call(vm: &mut VM<'_>, function: GpuiBaseFunctions, args: ArgValues) -> RunResult<Value> {
+pub(crate) fn call(vm: &mut VM<'_>, function: GpuiBaseFunctions, args: ArgValues) -> RunResult<Value> {
     match function {
         GpuiBaseFunctions::VFlex => {
             args.check_zero_args("v_flex", vm.heap)?;

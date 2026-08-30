@@ -1107,9 +1107,10 @@ impl<'a> Compiler<'a> {
             // Known module - emit LoadModule
             self.code.emit_u8(Opcode::LoadModule, builtin_module as u8)?;
         } else {
-            // Host / unknown module: LoadHostModule so `import ui` can resolve
-            // `{app_root}/ui.py`. Missing modules still raise ModuleNotFoundError
-            // at runtime (TYPE_CHECKING branches that never run stay silent).
+            // Host / unknown module: LoadHostModule so `import widgets` can
+            // resolve `{app_root}/widgets.py`. Missing modules still raise
+            // ModuleNotFoundError at runtime (TYPE_CHECKING branches that never
+            // run stay silent).
             let name_const = self.code.add_const(Value::InternString(module_name))?;
             self.code.emit_u16(Opcode::LoadHostModule, name_const)?;
         }
@@ -1137,7 +1138,7 @@ impl<'a> Compiler<'a> {
         } else {
             // Same LoadAttrImport path as StandardLib, after the host module is
             // on the stack. Previously this branch only emitted RaiseImportError
-            // and `from ui import button` never reached LoadAttr.
+            // and `from widgets import button` never reached LoadAttr.
             let name_const = self.code.add_const(Value::InternString(module_name))?;
             self.code.emit_u16(Opcode::LoadHostModule, name_const)?;
         }

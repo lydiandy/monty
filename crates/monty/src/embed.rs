@@ -228,7 +228,7 @@ impl Embed {
 
     /// Compile `source` together with host app-dir modules.
     ///
-    /// `extra` entries are top-level modules: name `"ui"` loads as `from ui import …`.
+    /// `extra` entries are top-level modules: name `"widgets"` loads as `from widgets import …`.
     pub fn run_source_with_modules(
         source: String,
         script_name: &str,
@@ -963,15 +963,15 @@ mod tests {
     }
 
     #[test]
-    fn from_ui_import_button_loads_host_module() {
+    fn from_widgets_import_button_loads_host_module() {
         let extra = vec![HostModuleSource {
-            name: "ui".into(),
-            filename: "ui.py".into(),
+            name: "widgets".into(),
+            filename: "widgets.py".into(),
             source: "X = 41\ndef button():\n    return X + 1\n".into(),
         }];
         let host: Rc<RefCell<dyn HostVtable>> = Rc::new(RefCell::new(NoHost));
         let mut embed = Embed::run_source_with_modules(
-            "from ui import button\ndef check():\n    return button()\n".into(),
+            "from widgets import button\ndef check():\n    return button()\n".into(),
             "main.py",
             extra,
             host,
@@ -1061,7 +1061,7 @@ mod tests {
             name: "row".into(),
             filename: "row.py".into(),
             source: concat!(
-                "from gpui import view\n",
+                "from ui import view\n",
                 "\n",
                 "@view\n",
                 "class Row:\n",
@@ -1073,7 +1073,7 @@ mod tests {
         let host: Rc<RefCell<dyn HostVtable>> = Rc::new(RefCell::new(NoHost));
         let embed = Embed::run_source_with_modules(
             concat!(
-                "from gpui import view\n",
+                "from ui import view\n",
                 "from row import Row\n",
                 "\n",
                 "@view\n",
@@ -1098,7 +1098,7 @@ mod tests {
         let host: Rc<RefCell<dyn HostVtable>> = Rc::new(RefCell::new(NoHost));
         let embed = Embed::run_source(
             concat!(
-                "from gpui import view\n",
+                "from ui import view\n",
                 "\n",
                 "@view\n",
                 "class A:\n",
@@ -1126,12 +1126,12 @@ mod tests {
     }
 
     #[test]
-    fn gpui_and_gpui_base_export_host_names() {
+    fn ui_exports_host_names() {
         let host: Rc<RefCell<dyn HostVtable>> = Rc::new(RefCell::new(NoHost));
         let mut embed = Embed::run_source(
             concat!(
-                "from gpui import view, window, localStorage, sessionStorage, fs, process, http, websocket\n",
-                "from gpui_base import (\n",
+                "from ui import view, window, localStorage, sessionStorage, fs, process, http, websocket\n",
+                "from ui import (\n",
                 "    v_flex, h_flex, div, svg, image,\n",
                 "    v_virtual_list, h_virtual_list,\n",
                 "    Button, Checkbox, Switch, Link,\n",
@@ -1145,11 +1145,47 @@ mod tests {
             "main.py",
             host,
         )
-        .expect("gpui / gpui_base exports");
+        .expect("ui exports");
         match embed.call_global("check", vec![]).expect("check") {
             HostValue::Int(1) => {}
             other => panic!("expected 1, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn from_gpui_import_is_not_a_module() {
+        let host: Rc<RefCell<dyn HostVtable>> = Rc::new(RefCell::new(NoHost));
+        let err = match Embed::run_source(
+            "from gpui import view\n".into(),
+            "main.py",
+            host,
+        ) {
+            Ok(_) => panic!("from gpui import must fail"),
+            Err(err) => err,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("gpui") || msg.to_lowercase().contains("module"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn from_gpui_base_import_is_not_a_module() {
+        let host: Rc<RefCell<dyn HostVtable>> = Rc::new(RefCell::new(NoHost));
+        let err = match Embed::run_source(
+            "from gpui_base import v_flex\n".into(),
+            "main.py",
+            host,
+        ) {
+            Ok(_) => panic!("from gpui_base import must fail"),
+            Err(err) => err,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("gpui_base") || msg.to_lowercase().contains("module"),
+            "unexpected error: {msg}"
+        );
     }
 
     struct PendingHost {
@@ -1213,7 +1249,7 @@ mod tests {
         let host: Rc<RefCell<dyn HostVtable>> = Rc::new(RefCell::new(PendingHost { pending: None }));
         let mut embed = Embed::run_source(
             concat!(
-                "from gpui_base import Button\n",
+                "from ui import Button\n",
                 "def paint(x):\n",
                 "    return x + 1\n",
                 "def check():\n",

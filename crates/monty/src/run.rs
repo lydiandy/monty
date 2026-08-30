@@ -209,7 +209,7 @@ pub(crate) struct Executor {
     /// Estimated heap capacity for pre-allocation on subsequent runs.
     /// Uses AtomicUsize for thread-safety (required by PyO3's Sync bound).
     heap_capacity: AtomicUsize,
-    /// Compiled app-dir modules (`from ui import button`). Not dumped.
+    /// Compiled app-dir modules (`from widgets import button`). Not dumped.
     #[serde(skip)]
     pub(crate) host_modules: HostModuleRegistry,
 }
@@ -241,8 +241,8 @@ impl Executor {
     }
 
     /// Compile the entry module together with host app-dir modules, sharing one
-    /// intern pool and one function table so `from ui import button` can load
-    /// `ui.py` as top-level module `ui`.
+    /// intern pool and one function table so `from widgets import button` can
+    /// load `widgets.py` as top-level module `widgets`.
     pub(crate) fn new_with_host_modules(
         code: String,
         script_name: &str,

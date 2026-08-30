@@ -1198,6 +1198,9 @@ pub enum StaticStrings {
     /// `dock_content` constructor exported by `gpui_base`.
     #[strum(serialize = "dock_content")]
     DockContent,
+    /// `ui` host module (`from ui import view, v_flex, Button`).
+    #[strum(serialize = "ui")]
+    Ui,
 }
 
 /// Computes an FNV-1a hash over static-string identities and serialization.
