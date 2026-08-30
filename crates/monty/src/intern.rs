@@ -1122,7 +1122,7 @@ pub enum StaticStrings {
     /// `timespec` keyword of `time.isoformat()`.
     Timespec,
 
-    // --- gpui-monty embedding (append-only; dump-stable) ---
+    // --- gpui-monty 嵌入（只追加；dump 判别式稳定） ---
     /// `gpui` host module.
     Gpui,
     /// `gpui_base` host module.
@@ -1201,6 +1201,113 @@ pub enum StaticStrings {
     /// `ui` host module (`from ui import view, v_flex, Button`).
     #[strum(serialize = "ui")]
     Ui,
+    /// `ui.set_theme` — 只追加；dump 判别式不动。
+    SetTheme,
+    /// `ui.load_theme`.
+    LoadTheme,
+    /// `ui.list_themes`.
+    ListThemes,
+    /// `PathBuilder` type exported by `ui`. 只追加；dump 判别式不动。
+    #[strum(serialize = "PathBuilder")]
+    PathBuilder,
+    /// `Background` type exported by `ui`. 只追加；dump 判别式不动。
+    #[strum(serialize = "Background")]
+    Background,
+    #[strum(serialize = "NumberInput")]
+    NumberInput,
+    #[strum(serialize = "OtpInput")]
+    OtpInput,
+    #[strum(serialize = "OtpState")]
+    OtpState,
+    #[strum(serialize = "Slider")]
+    Slider,
+    #[strum(serialize = "SliderTrack")]
+    SliderTrack,
+    #[strum(serialize = "SliderIndicator")]
+    SliderIndicator,
+    #[strum(serialize = "SliderThumb")]
+    SliderThumb,
+    #[strum(serialize = "SliderState")]
+    SliderState,
+    #[strum(serialize = "Progress")]
+    Progress,
+    #[strum(serialize = "ProgressTrack")]
+    ProgressTrack,
+    #[strum(serialize = "ProgressIndicator")]
+    ProgressIndicator,
+    #[strum(serialize = "Avatar")]
+    Avatar,
+    #[strum(serialize = "AvatarImage")]
+    AvatarImage,
+    #[strum(serialize = "AvatarFallback")]
+    AvatarFallback,
+    #[strum(serialize = "Pagination")]
+    Pagination,
+    #[strum(serialize = "pagination_items")]
+    PaginationItems,
+    #[strum(serialize = "Tabs")]
+    Tabs,
+    #[strum(serialize = "Tab")]
+    Tab,
+    #[strum(serialize = "Accordion")]
+    Accordion,
+    #[strum(serialize = "AccordionItem")]
+    AccordionItem,
+    #[strum(serialize = "AccordionHeader")]
+    AccordionHeader,
+    #[strum(serialize = "AccordionPanel")]
+    AccordionPanel,
+    #[strum(serialize = "AccordionTrigger")]
+    AccordionTrigger,
+    #[strum(serialize = "Radio")]
+    Radio,
+    #[strum(serialize = "RadioGroup")]
+    RadioGroup,
+    #[strum(serialize = "Toggle")]
+    Toggle,
+    #[strum(serialize = "ToggleGroup")]
+    ToggleGroup,
+    #[strum(serialize = "Table")]
+    Table,
+    #[strum(serialize = "TableHeader")]
+    TableHeader,
+    #[strum(serialize = "TableBody")]
+    TableBody,
+    #[strum(serialize = "TableRow")]
+    TableRow,
+    #[strum(serialize = "TableHead")]
+    TableHead,
+    #[strum(serialize = "TableCell")]
+    TableCell,
+    #[strum(serialize = "TableCaption")]
+    TableCaption,
+    #[strum(serialize = "Collapsible")]
+    Collapsible,
+    #[strum(serialize = "Popover")]
+    Popover,
+    #[strum(serialize = "HoverCard")]
+    HoverCard,
+    #[strum(serialize = "Popup")]
+    Popup,
+    #[strum(serialize = "Select")]
+    Select,
+    #[strum(serialize = "Combobox")]
+    Combobox,
+    #[strum(serialize = "DatePicker")]
+    DatePicker,
+    #[strum(serialize = "CalendarState")]
+    CalendarState,
+    #[strum(serialize = "Scrollbar")]
+    Scrollbar,
+    #[strum(serialize = "h_resizable")]
+    HResizable,
+    #[strum(serialize = "v_resizable")]
+    VResizable,
+    #[strum(serialize = "resizable_panel")]
+    ResizablePanel,
+    /// `FocusHandle` type exported by `ui`. 只追加；dump 判别式不动。
+    #[strum(serialize = "FocusHandle")]
+    FocusHandle,
 }
 
 /// Computes an FNV-1a hash over static-string identities and serialization.

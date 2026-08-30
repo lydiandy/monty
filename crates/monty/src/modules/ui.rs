@@ -8,9 +8,22 @@ use crate::{
     args::ArgValues,
     bytecode::VM,
     embed::{
-        HostObject, KIND_BUTTON_TYPE, KIND_CHECKBOX_TYPE, KIND_DOCK_AREA_TYPE, KIND_FS, KIND_HTTP,
-        KIND_INPUT_STATE_TYPE, KIND_INPUT_TYPE, KIND_LINK_TYPE, KIND_PROCESS, KIND_STORAGE,
-        KIND_SWITCH_TYPE, KIND_TEXTAREA_STATE_TYPE, KIND_TEXTAREA_TYPE, KIND_WEBSOCKET, KIND_WINDOW,
+        HostObject, KIND_ACCORDION_HEADER_TYPE, KIND_ACCORDION_ITEM_TYPE, KIND_ACCORDION_PANEL_TYPE,
+        KIND_ACCORDION_TRIGGER_TYPE, KIND_ACCORDION_TYPE, KIND_AVATAR_FALLBACK_TYPE,
+        KIND_AVATAR_IMAGE_TYPE, KIND_AVATAR_TYPE, KIND_BACKGROUND_TYPE, KIND_BUTTON_TYPE,
+        KIND_CALENDAR_STATE_TYPE, KIND_CHECKBOX_TYPE, KIND_COLLAPSIBLE_TYPE, KIND_COMBOBOX_TYPE,
+        KIND_DATE_PICKER_TYPE, KIND_DOCK_AREA_TYPE, KIND_FOCUS_HANDLE_TYPE, KIND_FS,
+        KIND_HOVER_CARD_TYPE, KIND_HTTP,
+        KIND_INPUT_STATE_TYPE, KIND_INPUT_TYPE, KIND_LINK_TYPE, KIND_NUMBER_INPUT_TYPE,
+        KIND_OTP_INPUT_TYPE, KIND_OTP_STATE_TYPE, KIND_PAGINATION_TYPE, KIND_PATH_BUILDER_TYPE,
+        KIND_POPOVER_TYPE, KIND_POPUP_TYPE, KIND_PROCESS, KIND_PROGRESS_INDICATOR_TYPE,
+        KIND_PROGRESS_TRACK_TYPE, KIND_PROGRESS_TYPE, KIND_RADIO_GROUP_TYPE, KIND_RADIO_TYPE,
+        KIND_SCROLLBAR_TYPE, KIND_SELECT_TYPE, KIND_SLIDER_INDICATOR_TYPE, KIND_SLIDER_STATE_TYPE,
+        KIND_SLIDER_THUMB_TYPE, KIND_SLIDER_TRACK_TYPE, KIND_SLIDER_TYPE, KIND_STORAGE,
+        KIND_SWITCH_TYPE, KIND_TABLE_BODY_TYPE, KIND_TABLE_CAPTION_TYPE, KIND_TABLE_CELL_TYPE,
+        KIND_TABLE_HEAD_TYPE, KIND_TABLE_HEADER_TYPE, KIND_TABLE_ROW_TYPE, KIND_TABLE_TYPE,
+        KIND_TABS_TYPE, KIND_TAB_TYPE, KIND_TEXTAREA_STATE_TYPE, KIND_TEXTAREA_TYPE,
+        KIND_TOGGLE_GROUP_TYPE, KIND_TOGGLE_TYPE, KIND_WEBSOCKET, KIND_WINDOW,
     },
     exception_private::RunResult,
     heap::{HeapData, HeapId},
@@ -20,11 +33,23 @@ use crate::{
     value::Value,
 };
 
+/// `ui` 主题函数。追加变体，不动 Runtime / Widgets 判别式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, strum::Display, serde::Serialize, serde::Deserialize)]
+pub(crate) enum ThemeFunctions {
+    #[strum(serialize = "set_theme")]
+    SetTheme,
+    #[strum(serialize = "load_theme")]
+    LoadTheme,
+    #[strum(serialize = "list_themes")]
+    ListThemes,
+}
+
 /// Functions exposed by the `ui` module.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub(crate) enum UiFunctions {
     Runtime(gpui::GpuiFunctions),
     Widgets(gpui_base::GpuiBaseFunctions),
+    Theme(ThemeFunctions),
 }
 
 impl std::fmt::Display for UiFunctions {
@@ -32,6 +57,7 @@ impl std::fmt::Display for UiFunctions {
         match self {
             Self::Runtime(func) => write!(f, "{func}"),
             Self::Widgets(func) => write!(f, "{func}"),
+            Self::Theme(func) => write!(f, "{func}"),
         }
     }
 }
@@ -198,12 +224,177 @@ pub fn create_module(vm: &mut VM<'_>) -> HeapId {
         data: 0,
     }));
     module.set_attr(StaticStrings::DockArea, Value::Ref(dock_area_ty), vm);
+    module.set_attr(
+        StaticStrings::SetTheme,
+        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Theme(
+            ThemeFunctions::SetTheme,
+        ))),
+        vm,
+    );
+    module.set_attr(
+        StaticStrings::LoadTheme,
+        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Theme(
+            ThemeFunctions::LoadTheme,
+        ))),
+        vm,
+    );
+    module.set_attr(
+        StaticStrings::ListThemes,
+        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Theme(
+            ThemeFunctions::ListThemes,
+        ))),
+        vm,
+    );
+    let path_builder_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
+        kind: KIND_PATH_BUILDER_TYPE,
+        data: 0,
+    }));
+    module.set_attr(StaticStrings::PathBuilder, Value::Ref(path_builder_ty), vm);
+    let background_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
+        kind: KIND_BACKGROUND_TYPE,
+        data: 0,
+    }));
+    module.set_attr(StaticStrings::Background, Value::Ref(background_ty), vm);
+    export_type(
+        vm,
+        &mut module,
+        StaticStrings::FocusHandle,
+        KIND_FOCUS_HANDLE_TYPE,
+    );
+    export_type(vm, &mut module, StaticStrings::NumberInput, KIND_NUMBER_INPUT_TYPE);
+    export_type(vm, &mut module, StaticStrings::OtpInput, KIND_OTP_INPUT_TYPE);
+    export_type(vm, &mut module, StaticStrings::OtpState, KIND_OTP_STATE_TYPE);
+    export_type(vm, &mut module, StaticStrings::Slider, KIND_SLIDER_TYPE);
+    export_type(vm, &mut module, StaticStrings::SliderTrack, KIND_SLIDER_TRACK_TYPE);
+    export_type(
+        vm,
+        &mut module,
+        StaticStrings::SliderIndicator,
+        KIND_SLIDER_INDICATOR_TYPE,
+    );
+    export_type(vm, &mut module, StaticStrings::SliderThumb, KIND_SLIDER_THUMB_TYPE);
+    export_type(vm, &mut module, StaticStrings::SliderState, KIND_SLIDER_STATE_TYPE);
+    export_type(vm, &mut module, StaticStrings::Progress, KIND_PROGRESS_TYPE);
+    export_type(
+        vm,
+        &mut module,
+        StaticStrings::ProgressTrack,
+        KIND_PROGRESS_TRACK_TYPE,
+    );
+    export_type(
+        vm,
+        &mut module,
+        StaticStrings::ProgressIndicator,
+        KIND_PROGRESS_INDICATOR_TYPE,
+    );
+    export_type(vm, &mut module, StaticStrings::Avatar, KIND_AVATAR_TYPE);
+    export_type(vm, &mut module, StaticStrings::AvatarImage, KIND_AVATAR_IMAGE_TYPE);
+    export_type(
+        vm,
+        &mut module,
+        StaticStrings::AvatarFallback,
+        KIND_AVATAR_FALLBACK_TYPE,
+    );
+    export_type(vm, &mut module, StaticStrings::Pagination, KIND_PAGINATION_TYPE);
+    export_type(vm, &mut module, StaticStrings::Tabs, KIND_TABS_TYPE);
+    export_type(vm, &mut module, StaticStrings::Tab, KIND_TAB_TYPE);
+    export_type(vm, &mut module, StaticStrings::Accordion, KIND_ACCORDION_TYPE);
+    export_type(
+        vm,
+        &mut module,
+        StaticStrings::AccordionItem,
+        KIND_ACCORDION_ITEM_TYPE,
+    );
+    export_type(
+        vm,
+        &mut module,
+        StaticStrings::AccordionHeader,
+        KIND_ACCORDION_HEADER_TYPE,
+    );
+    export_type(
+        vm,
+        &mut module,
+        StaticStrings::AccordionPanel,
+        KIND_ACCORDION_PANEL_TYPE,
+    );
+    export_type(
+        vm,
+        &mut module,
+        StaticStrings::AccordionTrigger,
+        KIND_ACCORDION_TRIGGER_TYPE,
+    );
+    export_type(vm, &mut module, StaticStrings::Radio, KIND_RADIO_TYPE);
+    export_type(vm, &mut module, StaticStrings::RadioGroup, KIND_RADIO_GROUP_TYPE);
+    export_type(vm, &mut module, StaticStrings::Toggle, KIND_TOGGLE_TYPE);
+    export_type(vm, &mut module, StaticStrings::ToggleGroup, KIND_TOGGLE_GROUP_TYPE);
+    export_type(vm, &mut module, StaticStrings::Table, KIND_TABLE_TYPE);
+    export_type(vm, &mut module, StaticStrings::TableHeader, KIND_TABLE_HEADER_TYPE);
+    export_type(vm, &mut module, StaticStrings::TableBody, KIND_TABLE_BODY_TYPE);
+    export_type(vm, &mut module, StaticStrings::TableRow, KIND_TABLE_ROW_TYPE);
+    export_type(vm, &mut module, StaticStrings::TableHead, KIND_TABLE_HEAD_TYPE);
+    export_type(vm, &mut module, StaticStrings::TableCell, KIND_TABLE_CELL_TYPE);
+    export_type(vm, &mut module, StaticStrings::TableCaption, KIND_TABLE_CAPTION_TYPE);
+    export_type(vm, &mut module, StaticStrings::Collapsible, KIND_COLLAPSIBLE_TYPE);
+    export_type(vm, &mut module, StaticStrings::Popover, KIND_POPOVER_TYPE);
+    export_type(vm, &mut module, StaticStrings::HoverCard, KIND_HOVER_CARD_TYPE);
+    export_type(vm, &mut module, StaticStrings::Popup, KIND_POPUP_TYPE);
+    export_type(vm, &mut module, StaticStrings::Select, KIND_SELECT_TYPE);
+    export_type(vm, &mut module, StaticStrings::Combobox, KIND_COMBOBOX_TYPE);
+    export_type(vm, &mut module, StaticStrings::DatePicker, KIND_DATE_PICKER_TYPE);
+    export_type(
+        vm,
+        &mut module,
+        StaticStrings::CalendarState,
+        KIND_CALENDAR_STATE_TYPE,
+    );
+    export_type(vm, &mut module, StaticStrings::Scrollbar, KIND_SCROLLBAR_TYPE);
+    module.set_attr(
+        StaticStrings::PaginationItems,
+        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
+            gpui_base::GpuiBaseFunctions::PaginationItems,
+        ))),
+        vm,
+    );
+    module.set_attr(
+        StaticStrings::HResizable,
+        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
+            gpui_base::GpuiBaseFunctions::HResizable,
+        ))),
+        vm,
+    );
+    module.set_attr(
+        StaticStrings::VResizable,
+        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
+            gpui_base::GpuiBaseFunctions::VResizable,
+        ))),
+        vm,
+    );
+    module.set_attr(
+        StaticStrings::ResizablePanel,
+        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
+            gpui_base::GpuiBaseFunctions::ResizablePanel,
+        ))),
+        vm,
+    );
     vm.heap.allocate(HeapData::Module(Box::new(module)))
+}
+
+fn export_type(vm: &mut VM<'_>, module: &mut Module, name: StaticStrings, kind: u16) {
+    let ty = vm.heap.allocate(HeapData::HostObject(HostObject { kind, data: 0 }));
+    module.set_attr(name, Value::Ref(ty), vm);
 }
 
 pub(super) fn call(vm: &mut VM<'_>, function: UiFunctions, args: ArgValues) -> RunResult<Value> {
     match function {
         UiFunctions::Runtime(function) => gpui::call(vm, function, args),
         UiFunctions::Widgets(function) => gpui_base::call(vm, function, args),
+        UiFunctions::Theme(function) => {
+            let name = match function {
+                ThemeFunctions::SetTheme => "set_theme",
+                ThemeFunctions::LoadTheme => "load_theme",
+                ThemeFunctions::ListThemes => "list_themes",
+            };
+            crate::embed::dispatch_construct(vm, name, args)
+        }
     }
 }

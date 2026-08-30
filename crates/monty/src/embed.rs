@@ -83,6 +83,112 @@ pub const KIND_WS_SOCKET: u16 = 25;
 pub const KIND_DOCK_AREA_TYPE: u16 = 26;
 /// Retained `DockArea` instance (GPUI entity handle in `data`).
 pub const KIND_DOCK_AREA: u16 = 27;
+/// `PathBuilder` type object (`PathBuilder.fill()` / `PathBuilder.stroke(width)`).
+pub const KIND_PATH_BUILDER_TYPE: u16 = 29;
+/// `Background` type object (`Background.solid` / `stop` / `linear_gradient` / …).
+/// 28 空着给 host-only `KIND_FOCUS_HANDLE`；30/31 是 host PathBuilder 实例和冻结 Path。
+pub const KIND_BACKGROUND_TYPE: u16 = 32;
+/// `NumberInput` type object (`NumberInput.new(state)`).
+pub const KIND_NUMBER_INPUT_TYPE: u16 = 33;
+/// `OtpInput` type object (`OtpInput.new(state)`).
+pub const KIND_OTP_INPUT_TYPE: u16 = 34;
+/// `OtpState` type object (`OtpState.new(length, options)`).
+pub const KIND_OTP_STATE_TYPE: u16 = 35;
+/// Retained `OtpState` instance.
+pub const KIND_OTP_STATE: u16 = 36;
+/// `Slider` type object (`Slider.new(state)`).
+pub const KIND_SLIDER_TYPE: u16 = 37;
+/// `SliderTrack` type object.
+pub const KIND_SLIDER_TRACK_TYPE: u16 = 38;
+/// `SliderIndicator` type object.
+pub const KIND_SLIDER_INDICATOR_TYPE: u16 = 39;
+/// `SliderThumb` type object.
+pub const KIND_SLIDER_THUMB_TYPE: u16 = 40;
+/// `SliderState` type object.
+pub const KIND_SLIDER_STATE_TYPE: u16 = 41;
+/// Retained `SliderState` instance.
+pub const KIND_SLIDER_STATE: u16 = 42;
+/// `Progress` type object.
+pub const KIND_PROGRESS_TYPE: u16 = 43;
+/// `ProgressTrack` type object.
+pub const KIND_PROGRESS_TRACK_TYPE: u16 = 44;
+/// `ProgressIndicator` type object.
+pub const KIND_PROGRESS_INDICATOR_TYPE: u16 = 45;
+/// `Avatar` type object.
+pub const KIND_AVATAR_TYPE: u16 = 46;
+/// `AvatarImage` type object.
+pub const KIND_AVATAR_IMAGE_TYPE: u16 = 47;
+/// `AvatarFallback` type object.
+pub const KIND_AVATAR_FALLBACK_TYPE: u16 = 48;
+/// `Pagination` type object.
+pub const KIND_PAGINATION_TYPE: u16 = 49;
+/// `Tabs` type object.
+pub const KIND_TABS_TYPE: u16 = 50;
+/// `Tab` type object.
+pub const KIND_TAB_TYPE: u16 = 51;
+/// `Accordion` type object.
+pub const KIND_ACCORDION_TYPE: u16 = 52;
+/// `AccordionItem` type object.
+pub const KIND_ACCORDION_ITEM_TYPE: u16 = 53;
+/// `AccordionHeader` type object.
+pub const KIND_ACCORDION_HEADER_TYPE: u16 = 54;
+/// `AccordionPanel` type object.
+pub const KIND_ACCORDION_PANEL_TYPE: u16 = 55;
+/// `AccordionTrigger` type object.
+pub const KIND_ACCORDION_TRIGGER_TYPE: u16 = 56;
+/// `Radio` type object.
+pub const KIND_RADIO_TYPE: u16 = 57;
+/// `RadioGroup` type object.
+pub const KIND_RADIO_GROUP_TYPE: u16 = 58;
+/// `Toggle` type object.
+pub const KIND_TOGGLE_TYPE: u16 = 59;
+/// `ToggleGroup` type object.
+pub const KIND_TOGGLE_GROUP_TYPE: u16 = 60;
+/// `Table` type object.
+pub const KIND_TABLE_TYPE: u16 = 61;
+/// `TableHeader` type object.
+pub const KIND_TABLE_HEADER_TYPE: u16 = 62;
+/// `TableBody` type object.
+pub const KIND_TABLE_BODY_TYPE: u16 = 63;
+/// `TableRow` type object.
+pub const KIND_TABLE_ROW_TYPE: u16 = 64;
+/// `TableHead` type object.
+pub const KIND_TABLE_HEAD_TYPE: u16 = 65;
+/// `TableCell` type object.
+pub const KIND_TABLE_CELL_TYPE: u16 = 66;
+/// `TableCaption` type object.
+pub const KIND_TABLE_CAPTION_TYPE: u16 = 67;
+/// `Collapsible` type object.
+pub const KIND_COLLAPSIBLE_TYPE: u16 = 68;
+/// `Popover` type object.
+pub const KIND_POPOVER_TYPE: u16 = 69;
+/// `HoverCard` type object.
+pub const KIND_HOVER_CARD_TYPE: u16 = 70;
+/// `Popup` type object.
+pub const KIND_POPUP_TYPE: u16 = 71;
+/// `Select` type object.
+pub const KIND_SELECT_TYPE: u16 = 72;
+/// `Combobox` type object.
+pub const KIND_COMBOBOX_TYPE: u16 = 73;
+/// `DatePicker` type object.
+pub const KIND_DATE_PICKER_TYPE: u16 = 74;
+/// `CalendarState` type object.
+pub const KIND_CALENDAR_STATE_TYPE: u16 = 75;
+/// Retained `CalendarState` instance.
+pub const KIND_CALENDAR_STATE: u16 = 76;
+/// `Scrollbar` type object (`Scrollbar.new` / `.horizontal` / `.vertical`).
+pub const KIND_SCROLLBAR_TYPE: u16 = 77;
+/// `FocusHandle` type object exported by `ui`. 没有 `.new`；实例是 `cx.focus_handle()`（kind 28）。
+pub const KIND_FOCUS_HANDLE_TYPE: u16 = 78;
+
+/// KIND 占用（不要改号，只追加）：
+/// - 28 host 实例 `KIND_FOCUS_HANDLE`（`engine.rs`，不在本文件）
+/// - 29 `KIND_PATH_BUILDER_TYPE` fork 类型
+/// - 30 host `KIND_PATH_BUILDER` 可变实例
+/// - 31 host `KIND_PATH` 冻结 path
+/// - 32 `KIND_BACKGROUND_TYPE` fork（任务书曾写 30，以源码为准）
+/// - 33+ 控件 TYPE / STATE，从 NumberInput 起
+/// - 78 `KIND_FOCUS_HANDLE_TYPE` fork 类型（只为 `from ui import FocusHandle`）
 
 /// Host-owned object: a kind tag plus a host-defined payload word.
 ///

@@ -38,6 +38,14 @@ pub(crate) enum GpuiBaseFunctions {
     DockArea,
     #[strum(serialize = "dock_content")]
     DockContent,
+    #[strum(serialize = "pagination_items")]
+    PaginationItems,
+    #[strum(serialize = "h_resizable")]
+    HResizable,
+    #[strum(serialize = "v_resizable")]
+    VResizable,
+    #[strum(serialize = "resizable_panel")]
+    ResizablePanel,
 }
 
 /// Creates the `gpui_base` module.
@@ -166,6 +174,15 @@ pub(crate) fn call(vm: &mut VM<'_>, function: GpuiBaseFunctions, args: ArgValues
         GpuiBaseFunctions::DockContent => {
             args.check_zero_args("dock_content", vm.heap)?;
             embed::dispatch_construct(vm, "dock_content", ArgValues::Empty)
+        }
+        GpuiBaseFunctions::PaginationItems => {
+            embed::dispatch_construct(vm, "pagination_items", args)
+        }
+        GpuiBaseFunctions::HResizable => embed::dispatch_construct(vm, "h_resizable", args),
+        GpuiBaseFunctions::VResizable => embed::dispatch_construct(vm, "v_resizable", args),
+        GpuiBaseFunctions::ResizablePanel => {
+            args.check_zero_args("resizable_panel", vm.heap)?;
+            embed::dispatch_construct(vm, "resizable_panel", ArgValues::Empty)
         }
     }
 }
