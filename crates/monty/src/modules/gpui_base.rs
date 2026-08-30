@@ -3,7 +3,10 @@
 use crate::{
     args::ArgValues,
     bytecode::VM,
-    embed::{self, HostObject, KIND_BUTTON_TYPE},
+    embed::{
+        self, HostObject, KIND_BUTTON_TYPE, KIND_CHECKBOX_TYPE, KIND_INPUT_STATE_TYPE,
+        KIND_LINK_TYPE, KIND_SWITCH_TYPE,
+    },
     exception_private::RunResult,
     heap::{HeapData, HeapId},
     intern::StaticStrings,
@@ -46,6 +49,26 @@ pub fn create_module(vm: &mut VM<'_>) -> HeapId {
         data: 0,
     }));
     module.set_attr(StaticStrings::Button, Value::Ref(button_ty), vm);
+    let checkbox_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
+        kind: KIND_CHECKBOX_TYPE,
+        data: 0,
+    }));
+    module.set_attr(StaticStrings::Checkbox, Value::Ref(checkbox_ty), vm);
+    let switch_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
+        kind: KIND_SWITCH_TYPE,
+        data: 0,
+    }));
+    module.set_attr(StaticStrings::Switch, Value::Ref(switch_ty), vm);
+    let link_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
+        kind: KIND_LINK_TYPE,
+        data: 0,
+    }));
+    module.set_attr(StaticStrings::Link, Value::Ref(link_ty), vm);
+    let input_state_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
+        kind: KIND_INPUT_STATE_TYPE,
+        data: 0,
+    }));
+    module.set_attr(StaticStrings::InputState, Value::Ref(input_state_ty), vm);
     vm.heap.allocate(HeapData::Module(Box::new(module)))
 }
 

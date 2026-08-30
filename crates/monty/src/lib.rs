@@ -45,7 +45,8 @@ pub use crate::function::FunctionMetadataFault;
 pub use crate::run::RefCountOutput;
 pub use crate::embed::{
     Embed, HostCtx, HostModuleSource, HostObject, HostValue, HostVtable, KIND_BUTTON_TYPE,
-    KIND_COLORS, KIND_CX, KIND_ELEMENT, KIND_THEME, KIND_VIEW,
+    KIND_CHECKBOX_TYPE, KIND_COLORS, KIND_CX, KIND_ELEMENT, KIND_INPUT_STATE_TYPE,
+    KIND_LINK_TYPE, KIND_SWITCH_TYPE, KIND_THEME, KIND_VIEW,
 };
 pub use crate::heap::HeapId;
 pub use crate::{

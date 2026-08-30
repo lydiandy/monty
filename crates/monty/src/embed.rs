@@ -39,6 +39,14 @@ pub const KIND_THEME: u16 = 4;
 pub const KIND_COLORS: u16 = 5;
 /// Nested `@view` handle returned by `cx.new(Class, props)`.
 pub const KIND_VIEW: u16 = 6;
+/// `Checkbox` type object (`Checkbox.new(...)`).
+pub const KIND_CHECKBOX_TYPE: u16 = 7;
+/// `Switch` type object (`Switch.new(...)`).
+pub const KIND_SWITCH_TYPE: u16 = 8;
+/// `Link` type object (`Link.new(...)`).
+pub const KIND_LINK_TYPE: u16 = 9;
+/// `InputState` type object. `.new` is a documented stub until a retained entity exists.
+pub const KIND_INPUT_STATE_TYPE: u16 = 10;
 
 /// Host-owned object: a kind tag plus a host-defined payload word.
 ///

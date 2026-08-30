@@ -1141,6 +1141,18 @@ pub enum StaticStrings {
     HFlex,
     /// `div` constructor.
     Div,
+    /// `Checkbox` type exported by `gpui_base`.
+    #[strum(serialize = "Checkbox")]
+    Checkbox,
+    /// `Switch` type exported by `gpui_base`.
+    #[strum(serialize = "Switch")]
+    Switch,
+    /// `Link` type exported by `gpui_base`.
+    #[strum(serialize = "Link")]
+    Link,
+    /// `InputState` type exported by `gpui_base` (stub until retained entity).
+    #[strum(serialize = "InputState")]
+    InputState,
 }
 
 /// Computes an FNV-1a hash over static-string identities and serialization.
