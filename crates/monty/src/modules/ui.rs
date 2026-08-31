@@ -416,6 +416,13 @@ pub fn create_module(vm: &mut VM<'_>) -> HeapId {
         ))),
         vm,
     );
+    module.set_attr(
+        StaticStrings::FpsMonitor,
+        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
+            gpui_base::GpuiBaseFunctions::FpsMonitor,
+        ))),
+        vm,
+    );
     vm.heap.allocate(HeapData::Module(Box::new(module)))
 }
 

@@ -56,6 +56,8 @@ pub(crate) enum GpuiBaseFunctions {
     Play,
     #[strum(serialize = "seq")]
     Seq,
+    #[strum(serialize = "fps_monitor")]
+    FpsMonitor,
 }
 
 /// Creates the `gpui_base` module.
@@ -199,5 +201,9 @@ pub(crate) fn call(vm: &mut VM<'_>, function: GpuiBaseFunctions, args: ArgValues
         GpuiBaseFunctions::Edge => embed::dispatch_construct(vm, "edge", args),
         GpuiBaseFunctions::Play => embed::dispatch_construct(vm, "play", args),
         GpuiBaseFunctions::Seq => embed::dispatch_construct(vm, "seq", args),
+        GpuiBaseFunctions::FpsMonitor => {
+            args.check_zero_args("fps_monitor", vm.heap)?;
+            embed::dispatch_construct(vm, "fps_monitor", ArgValues::Empty)
+        }
     }
 }

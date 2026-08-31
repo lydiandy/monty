@@ -1320,6 +1320,8 @@ pub enum StaticStrings {
     Play,
     /// `seq` constructor exported by `ui`. 只追加；空实现。
     Seq,
+    /// `fps_monitor` constructor exported by `ui`. 只追加。
+    FpsMonitor,
 }
 
 /// Computes an FNV-1a hash over static-string identities and serialization.
