@@ -9,26 +9,27 @@ use crate::{
     bytecode::VM,
     embed::{
         HostObject, KIND_ACCORDION_HEADER_TYPE, KIND_ACCORDION_ITEM_TYPE, KIND_ACCORDION_PANEL_TYPE,
-        KIND_ACCORDION_TRIGGER_TYPE, KIND_ACCORDION_TYPE, KIND_AVATAR_FALLBACK_TYPE,
-        KIND_AVATAR_IMAGE_TYPE, KIND_AVATAR_TYPE, KIND_BACKGROUND_TYPE, KIND_BUTTON_TYPE,
-        KIND_CALENDAR_STATE_TYPE, KIND_CHECKBOX_TYPE, KIND_COLLAPSIBLE_TYPE, KIND_COMBOBOX_TYPE,
-        KIND_DATE_PICKER_TYPE, KIND_DOCK_AREA_TYPE, KIND_FOCUS_HANDLE_TYPE, KIND_FS, KIND_NET,
-        KIND_HOVER_CARD_TYPE, KIND_HTTP,
-        KIND_INPUT_STATE_TYPE, KIND_INPUT_TYPE, KIND_LINK_TYPE, KIND_NUMBER_INPUT_TYPE,
-        KIND_OTP_INPUT_TYPE, KIND_OTP_STATE_TYPE, KIND_PAGINATION_TYPE, KIND_PATH_BUILDER_TYPE,
-        KIND_POPOVER_TYPE, KIND_POPUP_TYPE, KIND_PROCESS, KIND_PROGRESS_INDICATOR_TYPE,
-        KIND_PROGRESS_TRACK_TYPE, KIND_PROGRESS_TYPE, KIND_RADIO_GROUP_TYPE, KIND_RADIO_TYPE,
-        KIND_SCROLLBAR_TYPE, KIND_SELECT_TYPE, KIND_SLIDER_INDICATOR_TYPE, KIND_SLIDER_STATE_TYPE,
-        KIND_SLIDER_THUMB_TYPE, KIND_SLIDER_TRACK_TYPE, KIND_SLIDER_TYPE, KIND_STORAGE,
-        KIND_SWITCH_TYPE, KIND_TABLE_BODY_TYPE, KIND_TABLE_CAPTION_TYPE, KIND_TABLE_CELL_TYPE,
-        KIND_TABLE_HEAD_TYPE, KIND_TABLE_HEADER_TYPE, KIND_TABLE_ROW_TYPE, KIND_TABLE_TYPE,
-        KIND_TABS_TYPE, KIND_TAB_TYPE, KIND_TEXTAREA_STATE_TYPE, KIND_TEXTAREA_TYPE,
-        KIND_TOGGLE_GROUP_TYPE, KIND_TOGGLE_TYPE, KIND_WEBSOCKET, KIND_WINDOW,
+        KIND_ACCORDION_TRIGGER_TYPE, KIND_ACCORDION_TYPE, KIND_ALERT_DIALOG_ACTION_TYPE,
+        KIND_ALERT_DIALOG_BACKDROP_TYPE, KIND_ALERT_DIALOG_CANCEL_TYPE, KIND_ALERT_DIALOG_CLOSE_TYPE,
+        KIND_ALERT_DIALOG_DESCRIPTION_TYPE, KIND_ALERT_DIALOG_POPUP_TYPE, KIND_ALERT_DIALOG_TITLE_TYPE,
+        KIND_ALERT_DIALOG_TRIGGER_TYPE, KIND_ALERT_DIALOG_TYPE, KIND_AVATAR_FALLBACK_TYPE, KIND_AVATAR_IMAGE_TYPE,
+        KIND_AVATAR_TYPE, KIND_BACKGROUND_TYPE, KIND_BUTTON_TYPE, KIND_CALENDAR_STATE_TYPE, KIND_CALENDAR_TYPE,
+        KIND_CHECKBOX_TYPE, KIND_COLLAPSIBLE_TYPE, KIND_COLOR_PICKER_STATE_TYPE, KIND_COLOR_PICKER_TYPE,
+        KIND_COLOR_SWATCH_TYPE, KIND_COMBOBOX_TYPE, KIND_DATE_PICKER_TYPE, KIND_DOCK_AREA_TYPE, KIND_FOCUS_HANDLE_TYPE,
+        KIND_FS, KIND_HOVER_CARD_TYPE, KIND_HTTP, KIND_INPUT_STATE_TYPE, KIND_INPUT_TYPE, KIND_LINK_TYPE, KIND_NET,
+        KIND_NUMBER_INPUT_TYPE, KIND_OTP_INPUT_TYPE, KIND_OTP_STATE_TYPE, KIND_PAGINATION_TYPE, KIND_PATH_BUILDER_TYPE,
+        KIND_POPOVER_TYPE, KIND_POPUP_TYPE, KIND_PROCESS, KIND_PROGRESS_INDICATOR_TYPE, KIND_PROGRESS_TRACK_TYPE,
+        KIND_PROGRESS_TYPE, KIND_RADIO_GROUP_TYPE, KIND_RADIO_TYPE, KIND_SCROLLBAR_TYPE, KIND_SELECT_TYPE,
+        KIND_SLIDER_INDICATOR_TYPE, KIND_SLIDER_STATE_TYPE, KIND_SLIDER_THUMB_TYPE, KIND_SLIDER_TRACK_TYPE,
+        KIND_SLIDER_TYPE, KIND_STORAGE, KIND_SWITCH_TYPE, KIND_TAB_TYPE, KIND_TABLE_BODY_TYPE, KIND_TABLE_CAPTION_TYPE,
+        KIND_TABLE_CELL_TYPE, KIND_TABLE_HEAD_TYPE, KIND_TABLE_HEADER_TYPE, KIND_TABLE_ROW_TYPE, KIND_TABLE_TYPE,
+        KIND_TABS_TYPE, KIND_TEXT_VIEW_TYPE, KIND_TEXTAREA_STATE_TYPE, KIND_TEXTAREA_TYPE, KIND_TOGGLE_GROUP_TYPE,
+        KIND_TOGGLE_TYPE, KIND_TREE_STATE_TYPE, KIND_TREE_TYPE, KIND_WEBSOCKET, KIND_WINDOW,
     },
     exception_private::RunResult,
     heap::{HeapData, HeapId},
     intern::StaticStrings,
-    modules::{gpui, gpui_base, ModuleFunctions},
+    modules::{ModuleFunctions, gpui, gpui_base},
     types::Module,
     value::Value,
 };
@@ -67,9 +68,7 @@ pub fn create_module(vm: &mut VM<'_>) -> HeapId {
     let mut module = Module::new(StaticStrings::Ui);
     module.set_attr(
         StaticStrings::View,
-        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Runtime(
-            gpui::GpuiFunctions::View,
-        ))),
+        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Runtime(gpui::GpuiFunctions::View))),
         vm,
     );
     let window = vm.heap.allocate(HeapData::HostObject(HostObject {
@@ -86,15 +85,10 @@ pub fn create_module(vm: &mut VM<'_>) -> HeapId {
         kind: KIND_STORAGE,
         data: 1,
     }));
-    module.set_attr(
-        StaticStrings::SessionStorage,
-        Value::Ref(session_storage),
-        vm,
-    );
-    let fs = vm.heap.allocate(HeapData::HostObject(HostObject {
-        kind: KIND_FS,
-        data: 0,
-    }));
+    module.set_attr(StaticStrings::SessionStorage, Value::Ref(session_storage), vm);
+    let fs = vm
+        .heap
+        .allocate(HeapData::HostObject(HostObject { kind: KIND_FS, data: 0 }));
     module.set_attr(StaticStrings::Fs, Value::Ref(fs), vm);
     let process = vm.heap.allocate(HeapData::HostObject(HostObject {
         kind: KIND_PROCESS,
@@ -195,11 +189,7 @@ pub fn create_module(vm: &mut VM<'_>) -> HeapId {
         kind: KIND_TEXTAREA_STATE_TYPE,
         data: 0,
     }));
-    module.set_attr(
-        StaticStrings::TextareaState,
-        Value::Ref(textarea_state_ty),
-        vm,
-    );
+    module.set_attr(StaticStrings::TextareaState, Value::Ref(textarea_state_ty), vm);
     let input_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
         kind: KIND_INPUT_TYPE,
         data: 0,
@@ -231,23 +221,12 @@ pub fn create_module(vm: &mut VM<'_>) -> HeapId {
     module.set_attr(StaticStrings::DockArea, Value::Ref(dock_area_ty), vm);
     module.set_attr(
         StaticStrings::SetTheme,
-        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Theme(
-            ThemeFunctions::SetTheme,
-        ))),
-        vm,
-    );
-    module.set_attr(
-        StaticStrings::LoadTheme,
-        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Theme(
-            ThemeFunctions::LoadTheme,
-        ))),
+        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Theme(ThemeFunctions::SetTheme))),
         vm,
     );
     module.set_attr(
         StaticStrings::ListThemes,
-        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Theme(
-            ThemeFunctions::ListThemes,
-        ))),
+        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Theme(ThemeFunctions::ListThemes))),
         vm,
     );
     let path_builder_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
@@ -260,12 +239,7 @@ pub fn create_module(vm: &mut VM<'_>) -> HeapId {
         data: 0,
     }));
     module.set_attr(StaticStrings::Background, Value::Ref(background_ty), vm);
-    export_type(
-        vm,
-        &mut module,
-        StaticStrings::FocusHandle,
-        KIND_FOCUS_HANDLE_TYPE,
-    );
+    export_type(vm, &mut module, StaticStrings::FocusHandle, KIND_FOCUS_HANDLE_TYPE);
     export_type(vm, &mut module, StaticStrings::NumberInput, KIND_NUMBER_INPUT_TYPE);
     export_type(vm, &mut module, StaticStrings::OtpInput, KIND_OTP_INPUT_TYPE);
     export_type(vm, &mut module, StaticStrings::OtpState, KIND_OTP_STATE_TYPE);
@@ -280,12 +254,7 @@ pub fn create_module(vm: &mut VM<'_>) -> HeapId {
     export_type(vm, &mut module, StaticStrings::SliderThumb, KIND_SLIDER_THUMB_TYPE);
     export_type(vm, &mut module, StaticStrings::SliderState, KIND_SLIDER_STATE_TYPE);
     export_type(vm, &mut module, StaticStrings::Progress, KIND_PROGRESS_TYPE);
-    export_type(
-        vm,
-        &mut module,
-        StaticStrings::ProgressTrack,
-        KIND_PROGRESS_TRACK_TYPE,
-    );
+    export_type(vm, &mut module, StaticStrings::ProgressTrack, KIND_PROGRESS_TRACK_TYPE);
     export_type(
         vm,
         &mut module,
@@ -304,12 +273,7 @@ pub fn create_module(vm: &mut VM<'_>) -> HeapId {
     export_type(vm, &mut module, StaticStrings::Tabs, KIND_TABS_TYPE);
     export_type(vm, &mut module, StaticStrings::Tab, KIND_TAB_TYPE);
     export_type(vm, &mut module, StaticStrings::Accordion, KIND_ACCORDION_TYPE);
-    export_type(
-        vm,
-        &mut module,
-        StaticStrings::AccordionItem,
-        KIND_ACCORDION_ITEM_TYPE,
-    );
+    export_type(vm, &mut module, StaticStrings::AccordionItem, KIND_ACCORDION_ITEM_TYPE);
     export_type(
         vm,
         &mut module,
@@ -346,13 +310,69 @@ pub fn create_module(vm: &mut VM<'_>) -> HeapId {
     export_type(vm, &mut module, StaticStrings::Select, KIND_SELECT_TYPE);
     export_type(vm, &mut module, StaticStrings::Combobox, KIND_COMBOBOX_TYPE);
     export_type(vm, &mut module, StaticStrings::DatePicker, KIND_DATE_PICKER_TYPE);
+    export_type(vm, &mut module, StaticStrings::CalendarState, KIND_CALENDAR_STATE_TYPE);
+    export_type(vm, &mut module, StaticStrings::Calendar, KIND_CALENDAR_TYPE);
+    export_type(vm, &mut module, StaticStrings::ColorPicker, KIND_COLOR_PICKER_TYPE);
     export_type(
         vm,
         &mut module,
-        StaticStrings::CalendarState,
-        KIND_CALENDAR_STATE_TYPE,
+        StaticStrings::ColorPickerState,
+        KIND_COLOR_PICKER_STATE_TYPE,
+    );
+    export_type(vm, &mut module, StaticStrings::ColorSwatch, KIND_COLOR_SWATCH_TYPE);
+    export_type(vm, &mut module, StaticStrings::Tree, KIND_TREE_TYPE);
+    export_type(vm, &mut module, StaticStrings::TreeState, KIND_TREE_STATE_TYPE);
+    export_type(vm, &mut module, StaticStrings::AlertDialog, KIND_ALERT_DIALOG_TYPE);
+    export_type(
+        vm,
+        &mut module,
+        StaticStrings::AlertDialogTrigger,
+        KIND_ALERT_DIALOG_TRIGGER_TYPE,
+    );
+    export_type(
+        vm,
+        &mut module,
+        StaticStrings::AlertDialogPopup,
+        KIND_ALERT_DIALOG_POPUP_TYPE,
+    );
+    export_type(
+        vm,
+        &mut module,
+        StaticStrings::AlertDialogTitle,
+        KIND_ALERT_DIALOG_TITLE_TYPE,
+    );
+    export_type(
+        vm,
+        &mut module,
+        StaticStrings::AlertDialogDescription,
+        KIND_ALERT_DIALOG_DESCRIPTION_TYPE,
+    );
+    export_type(
+        vm,
+        &mut module,
+        StaticStrings::AlertDialogAction,
+        KIND_ALERT_DIALOG_ACTION_TYPE,
+    );
+    export_type(
+        vm,
+        &mut module,
+        StaticStrings::AlertDialogCancel,
+        KIND_ALERT_DIALOG_CANCEL_TYPE,
+    );
+    export_type(
+        vm,
+        &mut module,
+        StaticStrings::AlertDialogBackdrop,
+        KIND_ALERT_DIALOG_BACKDROP_TYPE,
+    );
+    export_type(
+        vm,
+        &mut module,
+        StaticStrings::AlertDialogClose,
+        KIND_ALERT_DIALOG_CLOSE_TYPE,
     );
     export_type(vm, &mut module, StaticStrings::Scrollbar, KIND_SCROLLBAR_TYPE);
+    export_type(vm, &mut module, StaticStrings::TextView, KIND_TEXT_VIEW_TYPE);
     module.set_attr(
         StaticStrings::PaginationItems,
         Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(

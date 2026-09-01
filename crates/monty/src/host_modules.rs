@@ -8,12 +8,7 @@
 
 use std::{cell::RefCell, collections::HashMap, sync::Arc};
 
-use crate::{
-    bytecode::Code,
-    heap::HeapId,
-    intern::FunctionId,
-    name_map::NameMap,
-};
+use crate::{bytecode::Code, heap::HeapId, intern::FunctionId, name_map::NameMap};
 
 /// Source for one top-level host module (`widgets.py` → name `"widgets"`).
 #[derive(Debug, Clone)]

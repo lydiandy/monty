@@ -5,10 +5,7 @@ use crate::{
     bytecode::{CallResult, VM},
     defer_drop,
     exception_private::{ExcType, ExcTypeExt, RunResult},
-    heap::{
-        BorrowedHeapReadMut, DropGuard, HeapId, HeapItem, HeapRead,
-        heap_read_ref_as_field_mut,
-    },
+    heap::{BorrowedHeapReadMut, DropGuard, HeapId, HeapItem, HeapRead, heap_read_ref_as_field_mut},
     intern::StringId,
     types::Dict,
     value::{EitherStr, Value},

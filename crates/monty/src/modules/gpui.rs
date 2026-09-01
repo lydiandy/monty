@@ -8,11 +8,9 @@
 use crate::{
     args::ArgValues,
     bytecode::VM,
+    embed::{HostObject, KIND_FS, KIND_HTTP, KIND_PROCESS, KIND_STORAGE, KIND_WEBSOCKET, KIND_WINDOW},
     exception_private::{ExcType, ExcTypeExt, RunResult},
     heap::{HeapData, HeapId, HeapReadOutput},
-    embed::{
-        HostObject, KIND_FS, KIND_HTTP, KIND_PROCESS, KIND_STORAGE, KIND_WEBSOCKET, KIND_WINDOW,
-    },
     intern::StaticStrings,
     modules::ModuleFunctions,
     types::{Module, PyTrait},
@@ -48,15 +46,10 @@ pub fn create_module(vm: &mut VM<'_>) -> HeapId {
         kind: KIND_STORAGE,
         data: 1,
     }));
-    module.set_attr(
-        StaticStrings::SessionStorage,
-        Value::Ref(session_storage),
-        vm,
-    );
-    let fs = vm.heap.allocate(HeapData::HostObject(HostObject {
-        kind: KIND_FS,
-        data: 0,
-    }));
+    module.set_attr(StaticStrings::SessionStorage, Value::Ref(session_storage), vm);
+    let fs = vm
+        .heap
+        .allocate(HeapData::HostObject(HostObject { kind: KIND_FS, data: 0 }));
     module.set_attr(StaticStrings::Fs, Value::Ref(fs), vm);
     let process = vm.heap.allocate(HeapData::HostObject(HostObject {
         kind: KIND_PROCESS,

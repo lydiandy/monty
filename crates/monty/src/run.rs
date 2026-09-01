@@ -268,11 +268,9 @@ impl Executor {
         for (module, nodes) in extra_asts {
             let filename = module.filename.clone();
             let source = module.source.clone();
-            let prepared = prepare_with_existing_names(
-                crate::parse::ParseResult { nodes, interner },
-                NameMap::default(),
-            )
-            .map_err(|e| e.into_python_exc(&filename, &source))?;
+            let prepared =
+                prepare_with_existing_names(crate::parse::ParseResult { nodes, interner }, NameMap::default())
+                    .map_err(|e| e.into_python_exc(&filename, &source))?;
             interner = prepared.interner;
             extra_prepared.push((module, prepared.globals, prepared.nodes));
         }
@@ -291,14 +289,9 @@ impl Executor {
         let mut host_specs = std::collections::HashMap::new();
         for (module, globals, nodes) in extra_prepared {
             let start = u32::try_from(functions.len()).unwrap_or(u32::MAX);
-            let compile_result = Compiler::compile_module_with_functions(
-                &nodes,
-                &interns,
-                &globals,
-                functions,
-                options,
-            )
-            .map_err(|e| e.into_python_exc(&module.filename, &module.source))?;
+            let compile_result =
+                Compiler::compile_module_with_functions(&nodes, &interns, &globals, functions, options)
+                    .map_err(|e| e.into_python_exc(&module.filename, &module.source))?;
             functions = compile_result.functions;
             let end = u32::try_from(functions.len()).unwrap_or(u32::MAX);
             host_specs.insert(
@@ -313,14 +306,9 @@ impl Executor {
         }
 
         let namespace_size = prepared.globals.len();
-        let compile_result = Compiler::compile_module_with_functions(
-            &prepared.nodes,
-            &interns,
-            &prepared.globals,
-            functions,
-            options,
-        )
-        .map_err(|e| e.into_python_exc(script_name, &code))?;
+        let compile_result =
+            Compiler::compile_module_with_functions(&prepared.nodes, &interns, &prepared.globals, functions, options)
+                .map_err(|e| e.into_python_exc(script_name, &code))?;
         interns.set_functions(compile_result.functions);
 
         Ok(Self {

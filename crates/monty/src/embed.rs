@@ -7,11 +7,7 @@
 //! Host types stay out of this crate: one [`HostObject`] payload plus a
 //! [`HostVtable`] implemented by the embedder.
 
-use std::{
-    cell::RefCell,
-    mem,
-    rc::Rc,
-};
+use std::{cell::RefCell, mem, rc::Rc};
 
 use monty_types::{CompileOptions, MontyException, PrintWriter, ResourceTracker};
 
@@ -23,7 +19,7 @@ use crate::{
     heap_data::FunctionDefaults,
     modules::ModuleFunctions,
     run::Executor,
-    types::{Dict, Instance, List, PyTrait, Type, allocate_string},
+    types::{Bytes, Dict, Instance, List, PyTrait, Type, allocate_string},
     value::Value,
 };
 
@@ -184,6 +180,50 @@ pub const KIND_FOCUS_HANDLE_TYPE: u16 = 78;
 pub const KIND_NET: u16 = 79;
 /// TCP 套接字实例（`net.connect` 的返回值）。
 pub const KIND_TCP_SOCKET: u16 = 80;
+/// `Calendar` 元素类型对象。
+pub const KIND_CALENDAR_TYPE: u16 = 81;
+/// `ColorPicker` 类型对象。
+pub const KIND_COLOR_PICKER_TYPE: u16 = 82;
+/// `ColorPickerState` 类型对象。
+pub const KIND_COLOR_PICKER_STATE_TYPE: u16 = 83;
+/// Retained `ColorPickerState` instance.
+pub const KIND_COLOR_PICKER_STATE: u16 = 84;
+/// `ColorSwatch` 类型对象。
+pub const KIND_COLOR_SWATCH_TYPE: u16 = 85;
+/// `Tree` 类型对象。
+pub const KIND_TREE_TYPE: u16 = 86;
+/// `TreeState` 类型对象。
+pub const KIND_TREE_STATE_TYPE: u16 = 87;
+/// Retained `TreeState` instance.
+pub const KIND_TREE_STATE: u16 = 88;
+/// `AlertDialog` 类型对象。
+pub const KIND_ALERT_DIALOG_TYPE: u16 = 89;
+/// `AlertDialogTrigger` 类型对象。
+pub const KIND_ALERT_DIALOG_TRIGGER_TYPE: u16 = 90;
+/// `AlertDialogPopup` 类型对象。
+pub const KIND_ALERT_DIALOG_POPUP_TYPE: u16 = 91;
+/// `AlertDialogTitle` 类型对象。
+pub const KIND_ALERT_DIALOG_TITLE_TYPE: u16 = 92;
+/// `AlertDialogDescription` 类型对象。
+pub const KIND_ALERT_DIALOG_DESCRIPTION_TYPE: u16 = 93;
+/// `AlertDialogAction` 类型对象。
+pub const KIND_ALERT_DIALOG_ACTION_TYPE: u16 = 94;
+/// `AlertDialogCancel` 类型对象。
+pub const KIND_ALERT_DIALOG_CANCEL_TYPE: u16 = 95;
+/// `AlertDialogBackdrop` 类型对象。
+pub const KIND_ALERT_DIALOG_BACKDROP_TYPE: u16 = 96;
+/// `AlertDialogClose` 类型对象。
+pub const KIND_ALERT_DIALOG_CLOSE_TYPE: u16 = 97;
+/// `TextView` 类型对象（`TextView.html` / `TextView.markdown`）。
+pub const KIND_TEXT_VIEW_TYPE: u16 = 98;
+/// `turso.connect` 返回的连接；`data == 0` 是 `db.turso` 工厂。
+pub const KIND_TURSO_CONN: u16 = 99;
+/// `conn.query` 行对象。查询结果会物化成 list；此 KIND 只追加占位。
+pub const KIND_TURSO_ROWS: u16 = 100;
+/// `conn.select` / `insert` / `update` / `delete` 返回的查询链。
+pub const KIND_DB_QUERY: u16 = 101;
+/// `conn.create_table` / `alter_table` 返回的表链。
+pub const KIND_DB_TABLE: u16 = 102;
 
 // KIND 占用（不要改号，只追加）：
 // - 28 host 实例 `KIND_FOCUS_HANDLE`（`engine.rs`，不在本文件）
@@ -195,6 +235,12 @@ pub const KIND_TCP_SOCKET: u16 = 80;
 // - 78 `KIND_FOCUS_HANDLE_TYPE` fork 类型（只为 `from ui import FocusHandle`）
 // - 79 `KIND_NET` fork 对象（`from ui import net`）
 // - 80 host `KIND_TCP_SOCKET` 实例
+// - 81+ Calendar 元素、ColorPicker / State、Tree / State、AlertDialog 零件
+// - 98 `KIND_TEXT_VIEW_TYPE` fork 类型（`TextView.html` / `markdown`）
+// - 99 host `KIND_TURSO_CONN`（`from db import turso` 工厂 / 连接）
+// - 100 host `KIND_TURSO_ROWS`
+// - 101 host `KIND_DB_QUERY`（连接上的查询链）
+// - 102 host `KIND_DB_TABLE`（连接上的表链）
 
 /// Host-owned object: a kind tag plus a host-defined payload word.
 ///
@@ -275,6 +321,16 @@ pub trait HostCtx {
     fn alloc_list(&mut self, _items: Vec<HostValue>) -> Result<HeapId, String> {
         Err("this host cannot allocate lists".into())
     }
+
+    /// Allocate a Python `bytes` object.
+    fn alloc_bytes(&mut self, _bytes: Vec<u8>) -> Result<HeapId, String> {
+        Err("this host cannot allocate bytes".into())
+    }
+
+    /// Copy of a heap `bytes` payload. `None` when `id` is not bytes.
+    fn bytes_get(&self, _id: HeapId) -> Option<Vec<u8>> {
+        None
+    }
 }
 
 /// Embedder callbacks for `HostObject` methods and StandardLib constructors.
@@ -286,6 +342,7 @@ pub trait HostVtable: 'static {
         obj: HostObject,
         attr: &str,
         args: Vec<HostValue>,
+        kwargs: Vec<(String, HostValue)>,
     ) -> Result<HostValue, String>;
 
     fn getattr(
@@ -296,12 +353,7 @@ pub trait HostVtable: 'static {
         attr: &str,
     ) -> Result<Option<HostValue>, String>;
 
-    fn construct(
-        &mut self,
-        ctx: &mut dyn HostCtx,
-        name: &str,
-        args: Vec<HostValue>,
-    ) -> Result<HostValue, String>;
+    fn construct(&mut self, ctx: &mut dyn HostCtx, name: &str, args: Vec<HostValue>) -> Result<HostValue, String>;
 
     /// A call the host wants the VM to run *after* `call_attr` returns.
     ///
@@ -347,13 +399,8 @@ impl Embed {
         extra: Vec<HostModuleSource>,
         host: Rc<RefCell<dyn HostVtable>>,
     ) -> Result<Self, MontyException> {
-        let executor = Executor::new_with_host_modules(
-            source,
-            script_name,
-            Vec::new(),
-            CompileOptions::default(),
-            extra,
-        )?;
+        let executor =
+            Executor::new_with_host_modules(source, script_name, Vec::new(), CompileOptions::default(), extra)?;
         let mut heap = Heap::new(executor.namespace_size(), ResourceTracker::default());
         heap.set_host(host);
         let globals = executor.empty_globals();
@@ -367,11 +414,7 @@ impl Embed {
     }
 
     /// Call a module-global function by name.
-    pub fn call_global(
-        &mut self,
-        name: &str,
-        args: Vec<HostValue>,
-    ) -> Result<HostValue, MontyException> {
+    pub fn call_global(&mut self, name: &str, args: Vec<HostValue>) -> Result<HostValue, MontyException> {
         let name_id = self
             .executor
             .interns
@@ -485,11 +528,7 @@ impl Embed {
     }
 
     /// Call a callable heap value (a click `Closure`) with host args (`event`, `cx`).
-    pub fn call_callable(
-        &mut self,
-        callable: HeapId,
-        args: Vec<HostValue>,
-    ) -> Result<HostValue, MontyException> {
+    pub fn call_callable(&mut self, callable: HeapId, args: Vec<HostValue>) -> Result<HostValue, MontyException> {
         self.with_idle_vm(move |vm| {
             vm.heap.inc_ref(callable);
             let boxed_module = boxed_module_function(vm, callable);
@@ -570,10 +609,7 @@ impl Embed {
     /// Allocate a list of host values.
     pub fn alloc_list(&mut self, items: Vec<HostValue>) -> Result<HeapId, MontyException> {
         self.with_idle_vm(|vm| {
-            let values: Vec<Value> = items
-                .into_iter()
-                .map(|value| host_value_to_value(vm, value))
-                .collect();
+            let values: Vec<Value> = items.into_iter().map(|value| host_value_to_value(vm, value)).collect();
             Ok(vm.heap.allocate(HeapData::List(List::new(values))))
         })
     }
@@ -595,9 +631,7 @@ impl Embed {
             let result = executor
                 .run_to_completion(&mut vm)
                 .map(|_| ())
-                .map_err(|e| {
-                    e.into_python_exception(&executor.interns, |_| Some(executor.code.as_str()))
-                });
+                .map_err(|e| e.into_python_exception(&executor.interns, |_| Some(executor.code.as_str())));
             *slot = Some(vm.take_globals());
             result
         });
@@ -635,19 +669,12 @@ fn class_is_view(heap: &Heap, interns: &crate::intern::Interns, id: HeapId) -> b
         return false;
     };
     matches!(
-        class
-            .namespace()
-            .get_by_str("__gpui_view__", heap, interns),
+        class.namespace().get_by_str("__gpui_view__", heap, interns),
         Some(Value::Bool(true))
     )
 }
 
-fn instance_has_method(
-    heap: &Heap,
-    interns: &crate::intern::Interns,
-    receiver: HeapId,
-    name: &str,
-) -> bool {
+fn instance_has_method(heap: &Heap, interns: &crate::intern::Interns, receiver: HeapId, name: &str) -> bool {
     let HeapData::Instance(instance) = heap.get(receiver) else {
         return false;
     };
@@ -693,11 +720,11 @@ pub(crate) fn dispatch_call_attr(
         .heap
         .host()
         .ok_or_else(|| SimpleException::new_msg(ExcType::RuntimeError, "no embedder host attached to the heap"))?;
-    let host_args = args_to_host(vm, args)?;
+    let (host_args, host_kwargs) = args_to_host(vm, args)?;
     let mut ctx = VmHostCtx { vm };
     let result = host
         .borrow_mut()
-        .call_attr(&mut ctx, id, obj, attr, host_args)
+        .call_attr(&mut ctx, id, obj, attr, host_args, host_kwargs)
         .map_err(|msg| SimpleException::new_msg(ExcType::RuntimeError, msg))?;
     let pending = host.borrow_mut().take_pending_call();
     let replace = host.borrow_mut().take_pending_replace();
@@ -749,7 +776,15 @@ pub(crate) fn dispatch_construct(vm: &mut VM<'_>, name: &str, args: ArgValues) -
         .heap
         .host()
         .ok_or_else(|| SimpleException::new_msg(ExcType::RuntimeError, "no embedder host attached to the heap"))?;
-    let host_args = args_to_host(vm, args)?;
+    let (host_args, host_kwargs) = args_to_host(vm, args)?;
+    if !host_kwargs.is_empty() {
+        let names: Vec<_> = host_kwargs.into_iter().map(|(k, _)| k).collect();
+        return Err(SimpleException::new_msg(
+            ExcType::TypeError,
+            format!("{name}() got unexpected keyword argument(s): {}", names.join(", ")),
+        )
+        .into());
+    }
     let mut ctx = VmHostCtx { vm };
     let result = host
         .borrow_mut()
@@ -823,8 +858,7 @@ impl HostCtx for VmHostCtx<'_, '_> {
         let HeapData::Dict(dict) = self.vm.heap.get(id) else {
             return None;
         };
-        dict.key_at(index)
-            .map(|key| borrowed_value_to_host(self.vm, key))
+        dict.key_at(index).map(|key| borrowed_value_to_host(self.vm, key))
     }
 
     fn alloc_dict(&mut self, entries: Vec<(String, HostValue)>) -> Result<HeapId, String> {
@@ -848,6 +882,17 @@ impl HostCtx for VmHostCtx<'_, '_> {
             .map(|value| host_value_to_value(self.vm, value))
             .collect();
         Ok(self.vm.heap.allocate(HeapData::List(List::new(values))))
+    }
+
+    fn alloc_bytes(&mut self, bytes: Vec<u8>) -> Result<HeapId, String> {
+        Ok(self.vm.heap.allocate(HeapData::Bytes(Bytes::new(bytes))))
+    }
+
+    fn bytes_get(&self, id: HeapId) -> Option<Vec<u8>> {
+        match self.vm.heap.get(id) {
+            HeapData::Bytes(bytes) => Some(bytes.as_slice().to_vec()),
+            _ => None,
+        }
     }
 }
 
@@ -874,13 +919,36 @@ fn borrowed_value_to_host(vm: &VM<'_>, value: &Value) -> HostValue {
     }
 }
 
-fn args_to_host(vm: &mut VM<'_>, args: ArgValues) -> RunResult<Vec<HostValue>> {
-    let pos = args.into_pos_only("host method", vm.heap)?;
+fn args_to_host(vm: &mut VM<'_>, args: ArgValues) -> RunResult<(Vec<HostValue>, Vec<(String, HostValue)>)> {
+    let (pos, kwargs) = args.into_parts();
     let mut out = Vec::new();
     for value in pos {
         out.push(value_to_host(vm, value)?);
     }
-    Ok(out)
+    let mut host_kwargs = Vec::new();
+    for (key, value) in kwargs {
+        let name = kwargs_key_to_string(vm, key)?;
+        host_kwargs.push((name, value_to_host(vm, value)?));
+    }
+    Ok((out, host_kwargs))
+}
+
+fn kwargs_key_to_string(vm: &mut VM<'_>, key: Value) -> RunResult<String> {
+    match key {
+        Value::InternString(id) => Ok(vm.interns.get_str(id).to_owned()),
+        Value::Ref(id) => {
+            let text = match vm.heap.get(id) {
+                HeapData::Str(s) => Some(s.as_str().to_owned()),
+                _ => None,
+            };
+            Value::Ref(id).drop_with(vm);
+            text.ok_or_else(|| SimpleException::new_msg(ExcType::TypeError, "keyword names must be strings").into())
+        }
+        other => {
+            other.drop_with(vm);
+            Err(SimpleException::new_msg(ExcType::TypeError, "keyword names must be strings").into())
+        }
+    }
 }
 
 fn value_to_host(vm: &mut VM<'_>, value: Value) -> RunResult<HostValue> {
@@ -918,11 +986,7 @@ fn value_to_host(vm: &mut VM<'_>, value: Value) -> RunResult<HostValue> {
         }
         other => {
             other.drop_with(vm);
-            Err(SimpleException::new_msg(
-                ExcType::TypeError,
-                "unsupported value at the host boundary",
-            )
-            .into())
+            Err(SimpleException::new_msg(ExcType::TypeError, "unsupported value at the host boundary").into())
         }
     }
 }
@@ -938,10 +1002,7 @@ fn boxed_module_function(vm: &VM<'_>, id: HeapId) -> Option<Value> {
 
 fn pack_module_function(mf: ModuleFunctions) -> u64 {
     let bytes = postcard::to_allocvec(&mf).expect("ModuleFunctions packs");
-    assert!(
-        bytes.len() <= 7,
-        "ModuleFunctions postcard encoding grew past 7 bytes"
-    );
+    assert!(bytes.len() <= 7, "ModuleFunctions postcard encoding grew past 7 bytes");
     let mut buf = [0u8; 8];
     buf[0] = bytes.len() as u8;
     buf[1..1 + bytes.len()].copy_from_slice(&bytes);
@@ -1010,11 +1071,7 @@ impl<'h> PyTrait<'h> for HeapObjectRead<'h, HostObject> {
         dispatch_call_attr(vm, id, obj, attr.as_str(vm.interns), args)
     }
 
-    fn py_getattr(
-        &self,
-        attr: &crate::value::EitherStr,
-        vm: &mut VM<'h>,
-    ) -> RunResult<Option<CallResult>> {
+    fn py_getattr(&self, attr: &crate::value::EitherStr, vm: &mut VM<'h>) -> RunResult<Option<CallResult>> {
         let id = self.id();
         let obj = *self.get(vm.heap);
         dispatch_getattr(vm, id, obj, attr.as_str(vm.interns))
@@ -1034,7 +1091,6 @@ impl<'h> PyTrait<'h> for HeapObjectRead<'h, HostObject> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1050,6 +1106,7 @@ mod tests {
             _obj: HostObject,
             attr: &str,
             _args: Vec<HostValue>,
+            _kwargs: Vec<(String, HostValue)>,
         ) -> Result<HostValue, String> {
             Err(format!("no host method {attr}"))
         }
@@ -1098,11 +1155,7 @@ mod tests {
     #[test]
     fn unknown_host_module_is_module_not_found() {
         let host: Rc<RefCell<dyn HostVtable>> = Rc::new(RefCell::new(NoHost));
-        let err = match Embed::run_source(
-            "from missing_mod import x\n".into(),
-            "main.py",
-            host,
-        ) {
+        let err = match Embed::run_source("from missing_mod import x\n".into(), "main.py", host) {
             Ok(_) => panic!("missing module should fail"),
             Err(err) => err,
         };
@@ -1129,17 +1182,11 @@ mod tests {
             matches!(embed.heap.get(id), HeapData::FunctionDefaults(_)),
             "DefFunction should box as FunctionDefaults"
         );
-        match embed
-            .call_callable(id, vec![HostValue::Int(7)])
-            .expect("ident(7)")
-        {
+        match embed.call_callable(id, vec![HostValue::Int(7)]).expect("ident(7)") {
             HostValue::Int(7) => {}
             other => panic!("expected 7, got {other:?}"),
         }
-        match embed
-            .call_callable(id, vec![HostValue::Int(8)])
-            .expect("ident(8)")
-        {
+        match embed.call_callable(id, vec![HostValue::Int(8)]).expect("ident(8)") {
             HostValue::Int(8) => {}
             other => panic!("expected 8, got {other:?}"),
         }
@@ -1159,10 +1206,7 @@ mod tests {
         };
         let obj = embed.host_object(id).expect("boxed module function");
         assert_eq!(obj.kind, KIND_BOXED_MODULE_FN);
-        match embed
-            .call_callable(id, vec![HostValue::Int(1)])
-            .expect("dumps(1)")
-        {
+        match embed.call_callable(id, vec![HostValue::Int(1)]).expect("dumps(1)") {
             HostValue::Str(s) => assert_eq!(s, "1"),
             other => panic!("expected \"1\", got {other:?}"),
         }
@@ -1267,11 +1311,7 @@ mod tests {
     #[test]
     fn from_gpui_import_is_not_a_module() {
         let host: Rc<RefCell<dyn HostVtable>> = Rc::new(RefCell::new(NoHost));
-        let err = match Embed::run_source(
-            "from gpui import view\n".into(),
-            "main.py",
-            host,
-        ) {
+        let err = match Embed::run_source("from gpui import view\n".into(), "main.py", host) {
             Ok(_) => panic!("from gpui import must fail"),
             Err(err) => err,
         };
@@ -1285,11 +1325,7 @@ mod tests {
     #[test]
     fn from_gpui_base_import_is_not_a_module() {
         let host: Rc<RefCell<dyn HostVtable>> = Rc::new(RefCell::new(NoHost));
-        let err = match Embed::run_source(
-            "from gpui_base import v_flex\n".into(),
-            "main.py",
-            host,
-        ) {
+        let err = match Embed::run_source("from gpui_base import v_flex\n".into(), "main.py", host) {
             Ok(_) => panic!("from gpui_base import must fail"),
             Err(err) => err,
         };
@@ -1312,6 +1348,7 @@ mod tests {
             _obj: HostObject,
             attr: &str,
             args: Vec<HostValue>,
+            _kwargs: Vec<(String, HostValue)>,
         ) -> Result<HostValue, String> {
             match attr {
                 "new" => {
@@ -1377,5 +1414,4 @@ mod tests {
             other => panic!("pending replace should yield 42, got {other:?}"),
         }
     }
-
 }

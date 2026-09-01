@@ -21,9 +21,12 @@ pub(crate) mod binascii;
 pub(crate) mod collections;
 pub(crate) mod dataclasses;
 pub(crate) mod datetime;
+pub(crate) mod db;
 pub(crate) mod functools;
 #[cfg(feature = "test-hooks")]
 pub(crate) mod gc;
+pub(crate) mod gpui;
+pub(crate) mod gpui_base;
 pub(crate) mod itertools;
 pub(crate) mod json;
 pub(crate) mod math;
@@ -32,10 +35,8 @@ pub(crate) mod pathlib;
 pub(crate) mod re;
 pub(crate) mod sys;
 pub(crate) mod typing;
-pub(crate) mod unicodedata;
-pub(crate) mod gpui;
-pub(crate) mod gpui_base;
 pub(crate) mod ui;
+pub(crate) mod unicodedata;
 
 /// Built-in modules that can be imported.
 #[repr(u8)]
@@ -85,6 +86,8 @@ pub(crate) enum StandardLib {
     /// Host UI module (`from ui import view, v_flex, Button`). Provided for
     /// monty-ui; production Monty still has no `sys.path`.
     Ui,
+    /// Host database package (`from db import turso`). Gc 之前追加。
+    Db,
     /// The `gc` module exposing a single `collect()` for tests. Only present
     /// under the `test-hooks` feature so production sandboxes never see it.
     ///
@@ -117,6 +120,7 @@ impl StandardLib {
             StaticStrings::Base64 => Some(Self::Base64),
             StaticStrings::Binascii => Some(Self::Binascii),
             StaticStrings::Ui => Some(Self::Ui),
+            StaticStrings::Db => Some(Self::Db),
             #[cfg(feature = "test-hooks")]
             StaticStrings::Gc => Some(Self::Gc),
             _ => None,
@@ -149,6 +153,7 @@ impl StandardLib {
             Self::Gpui => gpui::create_module(vm),
             Self::GpuiBase => gpui_base::create_module(vm),
             Self::Ui => ui::create_module(vm),
+            Self::Db => db::create_module(vm),
             #[cfg(feature = "test-hooks")]
             Self::Gc => gc::create_module(vm),
         }

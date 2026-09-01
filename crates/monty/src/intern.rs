@@ -1322,6 +1322,240 @@ pub enum StaticStrings {
     Seq,
     /// `fps_monitor` constructor exported by `ui`. 只追加。
     FpsMonitor,
+    /// `Calendar` 元素类型。只追加。
+    #[strum(serialize = "Calendar")]
+    Calendar,
+    /// `ColorPicker` 类型。只追加。
+    #[strum(serialize = "ColorPicker")]
+    ColorPicker,
+    /// `ColorPickerState` 类型。只追加。
+    #[strum(serialize = "ColorPickerState")]
+    ColorPickerState,
+    /// `ColorSwatch` 类型。只追加。
+    #[strum(serialize = "ColorSwatch")]
+    ColorSwatch,
+    /// `Tree` 类型。只追加。
+    #[strum(serialize = "Tree")]
+    Tree,
+    /// `TreeState` 类型。只追加。
+    #[strum(serialize = "TreeState")]
+    TreeState,
+    /// `AlertDialog` 类型。只追加。
+    #[strum(serialize = "AlertDialog")]
+    AlertDialog,
+    /// `AlertDialogTrigger` 类型。只追加。
+    #[strum(serialize = "AlertDialogTrigger")]
+    AlertDialogTrigger,
+    /// `AlertDialogPopup` 类型。只追加。
+    #[strum(serialize = "AlertDialogPopup")]
+    AlertDialogPopup,
+    /// `AlertDialogTitle` 类型。只追加。
+    #[strum(serialize = "AlertDialogTitle")]
+    AlertDialogTitle,
+    /// `AlertDialogDescription` 类型。只追加。
+    #[strum(serialize = "AlertDialogDescription")]
+    AlertDialogDescription,
+    /// `AlertDialogAction` 类型。只追加。
+    #[strum(serialize = "AlertDialogAction")]
+    AlertDialogAction,
+    /// `AlertDialogCancel` 类型。只追加。
+    #[strum(serialize = "AlertDialogCancel")]
+    AlertDialogCancel,
+    /// `AlertDialogBackdrop` 类型。只追加。
+    #[strum(serialize = "AlertDialogBackdrop")]
+    AlertDialogBackdrop,
+    /// `AlertDialogClose` 类型。只追加。
+    #[strum(serialize = "AlertDialogClose")]
+    AlertDialogClose,
+    /// `TextView` 类型。只追加。
+    #[strum(serialize = "TextView")]
+    TextView,
+    /// `db` 包。只追加。
+    Db,
+    /// `turso` 子模块。只追加。
+    Turso,
+    /// `turso.connect`。只追加。
+    Connect,
+    /// `conn.execute`。只追加。
+    Execute,
+    /// `conn.query`。只追加；脚本面不用。
+    Query,
+    /// `conn.commit`。只追加。
+    Commit,
+    /// `conn.exec`。只追加。
+    Exec,
+    /// `conn.tx`。只追加。
+    Tx,
+    /// `conn.rollback`。只追加。
+    Rollback,
+    /// `conn.create_table`。只追加。
+    CreateTable,
+    /// `conn.create_table_if_not_exist`。只追加。
+    CreateTableIfNotExist,
+    /// `conn.alter_table`。只追加。
+    AlterTable,
+    /// `conn.rename_table`。只追加。
+    RenameTable,
+    /// `conn.drop_table`。只追加。
+    DropTable,
+    /// `conn.drop_table_if_exist`。只追加。
+    DropTableIfExist,
+    /// `conn.truncate`。只追加。
+    Truncate,
+    /// `conn.table_exist`。只追加。
+    TableExist,
+    /// `conn.column_exist`。只追加。
+    ColumnExist,
+    /// `conn.drop_column`。只追加。
+    DropColumn,
+    /// `conn.rename_column`。只追加。
+    RenameColumn,
+    /// `conn.create_index`。只追加。
+    CreateIndex,
+    /// `conn.drop_index`。只追加。
+    DropIndex,
+    /// `Table.increment`。只追加。
+    Increment,
+    /// `Table.integer`。只追加。
+    Integer,
+    /// `Table.big_integer`。只追加。
+    BigInteger,
+    /// `Table.text`。只追加。
+    Text,
+    /// `Table.decimal`。只追加。
+    Decimal,
+    /// `Table.boolean`。只追加。
+    Boolean,
+    /// `Table.blob`。只追加。
+    Blob,
+    /// `Table.uuid`。只追加。
+    Uuid,
+    /// 列/表 `primary`。只追加。
+    Primary,
+    /// 列/表 `unique`。只追加。
+    Unique,
+    /// 列 `not_null`。只追加。
+    NotNull,
+    /// 列/表 `check`。只追加。
+    Check,
+    /// `Table.create`。只追加。
+    Create,
+    /// `conn.select`。只追加（`Select` 已占用 PascalCase）。
+    #[strum(serialize = "select")]
+    SqlSelect,
+    /// `Query.from_table`。只追加。
+    FromTable,
+    /// `conn.table`。只追加（`Table` 已占用 PascalCase）。
+    #[strum(serialize = "table")]
+    SqlTable,
+    /// `Query.column`。只追加。
+    Column,
+    /// `Query.first`。只追加。
+    First,
+    /// `Query.limit`。只追加。
+    Limit,
+    /// `Query.distinct`。只追加。
+    Distinct,
+    /// `Query.where`。只追加。
+    Where,
+    /// `Query.and_where`。只追加。
+    AndWhere,
+    /// `Query.or_where`。只追加。
+    OrWhere,
+    /// `Query.where_not`。只追加。
+    WhereNot,
+    /// `Query.where_in`。只追加。
+    WhereIn,
+    /// `Query.and_where_in`。只追加。
+    AndWhereIn,
+    /// `Query.or_where_in`。只追加。
+    OrWhereIn,
+    /// `Query.where_not_in`。只追加。
+    WhereNotIn,
+    /// `Query.where_null`。只追加。
+    WhereNull,
+    /// `Query.and_where_null`。只追加。
+    AndWhereNull,
+    /// `Query.or_where_null`。只追加。
+    OrWhereNull,
+    /// `Query.where_not_null`。只追加。
+    WhereNotNull,
+    /// `Query.where_between`。只追加。
+    WhereBetween,
+    /// `Query.and_where_between`。只追加。
+    AndWhereBetween,
+    /// `Query.or_where_between`。只追加。
+    OrWhereBetween,
+    /// `Query.where_not_between`。只追加。
+    WhereNotBetween,
+    /// `Query.where_exists`。只追加。
+    WhereExists,
+    /// `Query.where_raw`。只追加。
+    WhereRaw,
+    /// `Query.order_by`。只追加。
+    OrderBy,
+    /// `Query.order_by_raw`。只追加。
+    OrderByRaw,
+    /// `Query.group_by`。只追加。
+    GroupBy,
+    /// `Query.group_by_raw`。只追加。
+    GroupByRaw,
+    /// `Query.having`。只追加。
+    Having,
+    /// `Query.union_all`。只追加。
+    UnionAll,
+    /// `Query.intersect`。只追加。
+    Intersect,
+    /// `Query.except_`。只追加。
+    Except_,
+    /// `Query.left_join`。只追加。
+    LeftJoin,
+    /// `Query.right_join`。只追加。
+    RightJoin,
+    /// `Query.outer_join`。只追加。
+    OuterJoin,
+    /// `Query.cross_join`。只追加。
+    CrossJoin,
+    /// `Query.join_raw`。只追加。
+    JoinRaw,
+    /// `Query.min`。只追加。
+    Min,
+    /// `Query.max`。只追加。
+    Max,
+    /// `Query.sum`。只追加。
+    Sum,
+    /// `Query.avg`。只追加。
+    Avg,
+    /// `Query.to_sql`。只追加。
+    ToSql,
+    /// `Query.to_str`。只追加。
+    ToStr,
+    /// `Query.into`。只追加。
+    Into,
+    /// `Query.returning`。只追加。
+    Returning,
+    /// `Query.delete`。只追加。
+    Delete,
+    /// `turso.create_database`。只追加。
+    CreateDatabase,
+    /// `turso.create_database_if_not_exist`。只追加。
+    CreateDatabaseIfNotExist,
+    /// `turso.database_exist`。只追加。
+    DatabaseExist,
+    /// `turso.drop_database`。只追加。
+    DropDatabase,
+    /// `turso.drop_database_if_exist`。只追加。
+    DropDatabaseIfExist,
+    /// `Query.order_by_desc`。只追加。
+    OrderByDesc,
+    /// `Table.jsonb`。只追加。
+    Jsonb,
+    /// `conn.drop_unique`。只追加。
+    DropUnique,
+    /// `conn.drop_primary`。只追加。
+    DropPrimary,
+    /// `conn.drop_foreign`。只追加。
+    DropForeign,
 }
 
 /// Computes an FNV-1a hash over static-string identities and serialization.

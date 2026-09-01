@@ -1891,7 +1891,9 @@ impl<'h> VM<'h> {
             }
         };
 
-        let host_modules = self.host_modules.ok_or_else(|| ExcType::module_not_found_error(&name))?;
+        let host_modules = self
+            .host_modules
+            .ok_or_else(|| ExcType::module_not_found_error(&name))?;
 
         if let Some(rt) = host_modules.cached(&name) {
             self.heap.inc_ref(rt.module_id);
@@ -1910,14 +1912,11 @@ impl<'h> VM<'h> {
         let module_id = self.heap.allocate(HeapData::Module(Box::new(module_obj)));
         host_modules.begin_load(&name, module_id);
 
-        self.enter_run_reentry().map_err(RunError::from)?;  // ResourceError -> RunError
+        self.enter_run_reentry().map_err(RunError::from)?; // ResourceError -> RunError
         let mut guard = recursion::RunReentryGuard::new(self);
         let this = &mut *guard;
 
-        let saved_globals = mem::replace(
-            &mut this.globals,
-            (0..nglobals).map(|_| Value::Undefined).collect(),
-        );
+        let saved_globals = mem::replace(&mut this.globals, (0..nglobals).map(|_| Value::Undefined).collect());
         let frame = CallFrame::new_nested_module(code, this.exception_stack.len(), this.stack.len());
         if let Err(e) = this.push_frame(frame) {
             let host_globals = mem::replace(&mut this.globals, saved_globals);

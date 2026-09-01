@@ -5,9 +5,8 @@ use crate::{
     args::ArgValues,
     bytecode::VM,
     embed::{
-        self, HostObject, KIND_BUTTON_TYPE, KIND_CHECKBOX_TYPE, KIND_DOCK_AREA_TYPE,
-        KIND_INPUT_STATE_TYPE, KIND_INPUT_TYPE, KIND_LINK_TYPE, KIND_SWITCH_TYPE,
-        KIND_TEXTAREA_STATE_TYPE, KIND_TEXTAREA_TYPE,
+        self, HostObject, KIND_BUTTON_TYPE, KIND_CHECKBOX_TYPE, KIND_DOCK_AREA_TYPE, KIND_INPUT_STATE_TYPE,
+        KIND_INPUT_TYPE, KIND_LINK_TYPE, KIND_SWITCH_TYPE, KIND_TEXTAREA_STATE_TYPE, KIND_TEXTAREA_TYPE,
     },
     exception_private::RunResult,
     heap::{HeapData, HeapId},
@@ -127,11 +126,7 @@ pub fn create_module(vm: &mut VM<'_>) -> HeapId {
         kind: KIND_TEXTAREA_STATE_TYPE,
         data: 0,
     }));
-    module.set_attr(
-        StaticStrings::TextareaState,
-        Value::Ref(textarea_state_ty),
-        vm,
-    );
+    module.set_attr(StaticStrings::TextareaState, Value::Ref(textarea_state_ty), vm);
     let input_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
         kind: KIND_INPUT_TYPE,
         data: 0,
@@ -176,20 +171,14 @@ pub(crate) fn call(vm: &mut VM<'_>, function: GpuiBaseFunctions, args: ArgValues
         }
         GpuiBaseFunctions::Svg => embed::dispatch_construct(vm, "svg", args),
         GpuiBaseFunctions::Image => embed::dispatch_construct(vm, "image", args),
-        GpuiBaseFunctions::VVirtualList => {
-            embed::dispatch_construct(vm, "v_virtual_list", args)
-        }
-        GpuiBaseFunctions::HVirtualList => {
-            embed::dispatch_construct(vm, "h_virtual_list", args)
-        }
+        GpuiBaseFunctions::VVirtualList => embed::dispatch_construct(vm, "v_virtual_list", args),
+        GpuiBaseFunctions::HVirtualList => embed::dispatch_construct(vm, "h_virtual_list", args),
         GpuiBaseFunctions::DockArea => embed::dispatch_construct(vm, "dock_area", args),
         GpuiBaseFunctions::DockContent => {
             args.check_zero_args("dock_content", vm.heap)?;
             embed::dispatch_construct(vm, "dock_content", ArgValues::Empty)
         }
-        GpuiBaseFunctions::PaginationItems => {
-            embed::dispatch_construct(vm, "pagination_items", args)
-        }
+        GpuiBaseFunctions::PaginationItems => embed::dispatch_construct(vm, "pagination_items", args),
         GpuiBaseFunctions::HResizable => embed::dispatch_construct(vm, "h_resizable", args),
         GpuiBaseFunctions::VResizable => embed::dispatch_construct(vm, "v_resizable", args),
         GpuiBaseFunctions::ResizablePanel => {

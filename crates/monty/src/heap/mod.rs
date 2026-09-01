@@ -885,7 +885,6 @@ impl<'de> serde::Deserialize<'de> for UnsafeHeapData {
     }
 }
 
-
 /// Embedder vtable. Not serialized — a restored dump has no host.
 pub(crate) struct HostVtableSlot(Option<Rc<RefCell<dyn crate::embed::HostVtable>>>);
 
@@ -1153,7 +1152,6 @@ impl Heap {
     pub(crate) fn host(&self) -> Option<Rc<RefCell<dyn crate::embed::HostVtable>>> {
         self.host.0.clone()
     }
-
 
     /// Number of entries in the heap (including freed slots).
     pub fn size(&self) -> usize {
