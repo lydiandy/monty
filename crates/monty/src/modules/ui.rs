@@ -1,8 +1,5 @@
-//! Host UI module (`from ui import view, v_flex, Button`).
-//!
-//! Combines the former `gpui` runtime exports and `gpui_base` widget
-//! constructors. Old `Gpui` / `GpuiBase` [`ModuleFunctions`] variants remain
-//! so dumps keep their discriminants.
+//! Former host UI module. Discriminant and [`ModuleFunctions`] remain so dumps
+//! keep their ids. Live `from ui import` is registered by the embedder.
 
 use crate::{
     args::ArgValues,

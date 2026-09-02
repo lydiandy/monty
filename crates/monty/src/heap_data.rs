@@ -245,7 +245,12 @@ impl HeapData {
     pub(crate) fn is_callable(&self) -> bool {
         matches!(
             self,
-            Self::Class(_) | Self::BoundMethod(_) | Self::Closure(_) | Self::FunctionDefaults(_) | Self::ExtFunction(_)
+            Self::Class(_)
+                | Self::BoundMethod(_)
+                | Self::Closure(_)
+                | Self::FunctionDefaults(_)
+                | Self::ExtFunction(_)
+                | Self::HostObject(_)
         )
     }
 

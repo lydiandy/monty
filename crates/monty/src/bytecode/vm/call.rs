@@ -541,6 +541,10 @@ impl VM<'_> {
                 let name = function.clone_name();
                 return Ok(CallResult::External(name, args));
             }
+            HeapData::HostObject(obj) => {
+                let obj = *obj;
+                return crate::embed::dispatch_call(self, heap_id, obj, args);
+            }
             _ => {
                 // Coupling check: dispatch rejected this Ref, so the heap-side
                 // callability predicate must agree (see `HeapData::is_callable`).

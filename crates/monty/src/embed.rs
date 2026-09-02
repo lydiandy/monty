@@ -19,8 +19,9 @@ use crate::{
     heap_data::FunctionDefaults,
     modules::ModuleFunctions,
     run::Executor,
-    types::{Bytes, Dict, Instance, List, PyTrait, Type, allocate_string},
-    value::Value,
+    intern::StaticStrings,
+    types::{Bytes, Dict, Instance, List, Module, PyTrait, Type, allocate_string},
+    value::{EitherStr, Value},
 };
 
 pub use crate::host_modules::HostModuleSource;
@@ -241,6 +242,8 @@ pub const KIND_DB_TABLE: u16 = 102;
 // - 100 host `KIND_TURSO_ROWS`
 // - 101 host `KIND_DB_QUERY`（连接上的查询链）
 // - 102 host `KIND_DB_TABLE`（连接上的表链）
+// - 103 host `KIND_VIEW_DECORATOR`（`ui.view`）
+// - 104 host `KIND_HOST_FN`（`v_flex` / `set_theme` / …）
 
 /// Host-owned object: a kind tag plus a host-defined payload word.
 ///
@@ -331,6 +334,21 @@ pub trait HostCtx {
     fn bytes_get(&self, _id: HeapId) -> Option<Vec<u8>> {
         None
     }
+
+    /// Allocate an empty Python module named `name` (`name` must be interned).
+    fn alloc_module(&mut self, _name: &str) -> Result<HeapId, String> {
+        Err("this host cannot allocate modules".into())
+    }
+
+    /// Set a module attribute. `name` should be interned (StaticStrings / compile pool).
+    fn module_set_attr(&mut self, _module: HeapId, _name: &str, _value: HostValue) -> Result<(), String> {
+        Err("this host cannot set module attributes".into())
+    }
+
+    /// Mark a class `@view` (`__gpui_view__ = True`).
+    fn mark_view_class(&mut self, _class: HeapId) -> Result<(), String> {
+        Err("this host cannot mark @view".into())
+    }
 }
 
 /// Embedder callbacks for `HostObject` methods and StandardLib constructors.
@@ -354,6 +372,27 @@ pub trait HostVtable: 'static {
     ) -> Result<Option<HostValue>, String>;
 
     fn construct(&mut self, ctx: &mut dyn HostCtx, name: &str, args: Vec<HostValue>) -> Result<HostValue, String>;
+
+    /// Native module for `from {name} import …`. Default: none (fall through to app-dir `.py`).
+    fn create_native_module(
+        &mut self,
+        _ctx: &mut dyn HostCtx,
+        _name: &str,
+    ) -> Result<Option<HeapId>, String> {
+        Ok(None)
+    }
+
+    /// Calling a `HostObject` as a function (`v_flex()`, `@view`).
+    fn call(
+        &mut self,
+        _ctx: &mut dyn HostCtx,
+        _id: HeapId,
+        obj: HostObject,
+        _args: Vec<HostValue>,
+        _kwargs: Vec<(String, HostValue)>,
+    ) -> Result<HostValue, String> {
+        Err(format!("host object kind {} is not callable", obj.kind))
+    }
 
     /// A call the host wants the VM to run *after* `call_attr` returns.
     ///
@@ -793,6 +832,63 @@ pub(crate) fn dispatch_construct(vm: &mut VM<'_>, name: &str, args: ArgValues) -
     Ok(host_value_to_value(ctx.vm, result))
 }
 
+pub(crate) fn dispatch_call(
+    vm: &mut VM<'_>,
+    id: HeapId,
+    obj: HostObject,
+    args: ArgValues,
+) -> RunResult<CallResult> {
+    if obj.kind == KIND_BOXED_MODULE_FN {
+        let mf = unpack_module_function(obj.data);
+        return mf.call(vm, args);
+    }
+    let host = vm
+        .heap
+        .host()
+        .ok_or_else(|| SimpleException::new_msg(ExcType::RuntimeError, "no embedder host attached to the heap"))?;
+    let (host_args, host_kwargs) = args_to_host(vm, args)?;
+    let mut ctx = VmHostCtx { vm };
+    let result = host
+        .borrow_mut()
+        .call(&mut ctx, id, obj, host_args, host_kwargs)
+        .map_err(|msg| SimpleException::new_msg(ExcType::RuntimeError, msg))?;
+    let pending = host.borrow_mut().take_pending_call();
+    let replace = host.borrow_mut().take_pending_replace();
+    let value = host_value_to_value(ctx.vm, result);
+    if let Some((callable, args)) = pending {
+        let func = Value::Ref(callable);
+        let arg_values = host_values_to_args(ctx.vm, args).map_err(run_err_from_monty)?;
+        let nested = ctx
+            .vm
+            .evaluate_function("<host-callback>", &func, arg_values)
+            .map_err(|e| e.into_python_exception(ctx.vm.interns, |_| Some("")))?;
+        nested.drop_with(ctx.vm);
+        func.drop_with(ctx.vm);
+    }
+    if let Some((callable, args)) = replace {
+        value.drop_with(ctx.vm);
+        let func = Value::Ref(callable);
+        let arg_values = host_values_to_args(ctx.vm, args).map_err(run_err_from_monty)?;
+        let nested = ctx
+            .vm
+            .evaluate_function("<host-callback>", &func, arg_values)
+            .map_err(|e| e.into_python_exception(ctx.vm.interns, |_| Some("")))?;
+        func.drop_with(ctx.vm);
+        return Ok(CallResult::Value(nested));
+    }
+    Ok(CallResult::Value(value))
+}
+
+pub(crate) fn dispatch_create_native_module(vm: &mut VM<'_>, name: &str) -> RunResult<Option<HeapId>> {
+    let Some(host) = vm.heap.host() else {
+        return Ok(None);
+    };
+    let mut ctx = VmHostCtx { vm };
+    host.borrow_mut()
+        .create_native_module(&mut ctx, name)
+        .map_err(|msg| SimpleException::new_msg(ExcType::RuntimeError, msg).into())
+}
+
 struct VmHostCtx<'a, 'h> {
     vm: &'a mut VM<'h>,
 }
@@ -892,6 +988,44 @@ impl HostCtx for VmHostCtx<'_, '_> {
         match self.vm.heap.get(id) {
             HeapData::Bytes(bytes) => Some(bytes.as_slice().to_vec()),
             _ => None,
+        }
+    }
+
+    fn alloc_module(&mut self, name: &str) -> Result<HeapId, String> {
+        let name_id = self
+            .vm
+            .interns
+            .get_string_id_by_name(name)
+            .ok_or_else(|| format!("module name `{name}` is not interned"))?;
+        Ok(self.vm.heap.allocate(HeapData::Module(Box::new(Module::new(name_id)))))
+    }
+
+    fn module_set_attr(&mut self, module: HeapId, name: &str, value: HostValue) -> Result<(), String> {
+        let key = if let Some(id) = self.vm.interns.get_string_id_by_name(name) {
+            Value::InternString(id)
+        } else {
+            allocate_string(name.to_owned(), self.vm.heap)
+        };
+        let v = host_value_to_value(self.vm, value);
+        match self.vm.heap.read(module) {
+            crate::heap::HeapReadOutput::Module(mut module) => {
+                module.set_attr_key(key, v, self.vm);
+                Ok(())
+            }
+            _ => {
+                key.drop_with(self.vm);
+                v.drop_with(self.vm);
+                Err("module_set_attr expects a module".into())
+            }
+        }
+    }
+
+    fn mark_view_class(&mut self, class: HeapId) -> Result<(), String> {
+        match self.vm.heap.read(class) {
+            crate::heap::HeapReadOutput::Class(mut class) => class
+                .py_set_attr(&EitherStr::from(StaticStrings::GpuiView), Value::Bool(true), self.vm)
+                .map_err(|error| format!("{error:?}")),
+            _ => Err("@view expects a class".into()),
         }
     }
 }
@@ -1098,6 +1232,113 @@ mod tests {
 
     struct NoHost;
 
+    /// Test-only; same number as monty-ui `KIND_VIEW_DECORATOR`.
+    const KIND_VIEW_DECORATOR: u16 = 103;
+
+    struct MiniUiHost {
+        pending: Option<(HeapId, Vec<HostValue>)>,
+    }
+
+    impl MiniUiHost {
+        fn new() -> Self {
+            Self { pending: None }
+        }
+    }
+
+    impl HostVtable for MiniUiHost {
+        fn call_attr(
+            &mut self,
+            ctx: &mut dyn HostCtx,
+            _id: HeapId,
+            _obj: HostObject,
+            attr: &str,
+            args: Vec<HostValue>,
+            _kwargs: Vec<(String, HostValue)>,
+        ) -> Result<HostValue, String> {
+            match attr {
+                "new" => {
+                    let id = ctx.alloc(HostObject {
+                        kind: KIND_ELEMENT,
+                        data: 1,
+                    });
+                    Ok(HostValue::Heap(id))
+                }
+                "hover" => {
+                    let Some(HostValue::Heap(cb)) = args.first() else {
+                        return Err("hover expects a callable".into());
+                    };
+                    self.pending = Some((*cb, vec![HostValue::Int(41)]));
+                    Ok(HostValue::Int(0))
+                }
+                other => Err(format!("no host method {other}")),
+            }
+        }
+
+        fn getattr(
+            &mut self,
+            _ctx: &mut dyn HostCtx,
+            _id: HeapId,
+            _obj: HostObject,
+            _attr: &str,
+        ) -> Result<Option<HostValue>, String> {
+            Ok(None)
+        }
+
+        fn construct(
+            &mut self,
+            _ctx: &mut dyn HostCtx,
+            name: &str,
+            _args: Vec<HostValue>,
+        ) -> Result<HostValue, String> {
+            Err(format!("no host constructor {name}"))
+        }
+
+        fn create_native_module(
+            &mut self,
+            ctx: &mut dyn HostCtx,
+            name: &str,
+        ) -> Result<Option<HeapId>, String> {
+            if name != "ui" {
+                return Ok(None);
+            }
+            let module = ctx.alloc_module("ui")?;
+            let view = ctx.alloc(HostObject {
+                kind: KIND_VIEW_DECORATOR,
+                data: 0,
+            });
+            ctx.module_set_attr(module, "view", HostValue::Heap(view))?;
+            let button = ctx.alloc(HostObject {
+                kind: KIND_BUTTON_TYPE,
+                data: 0,
+            });
+            ctx.module_set_attr(module, "Button", HostValue::Heap(button))?;
+            Ok(Some(module))
+        }
+
+        fn call(
+            &mut self,
+            ctx: &mut dyn HostCtx,
+            _id: HeapId,
+            obj: HostObject,
+            args: Vec<HostValue>,
+            _kwargs: Vec<(String, HostValue)>,
+        ) -> Result<HostValue, String> {
+            if obj.kind != KIND_VIEW_DECORATOR {
+                return Err(format!("host object kind {} is not callable", obj.kind));
+            }
+            let Some(HostValue::Heap(class)) = args.first() else {
+                return Err("@view expects a class".into());
+            };
+            ctx.mark_view_class(*class)?;
+            ctx.inc_ref(*class);
+            Ok(HostValue::Heap(*class))
+        }
+
+        fn take_pending_replace(&mut self) -> Option<(HeapId, Vec<HostValue>)> {
+            self.pending.take()
+        }
+    }
+
     impl HostVtable for NoHost {
         fn call_attr(
             &mut self,
@@ -1226,7 +1467,7 @@ mod tests {
             )
             .into(),
         }];
-        let host: Rc<RefCell<dyn HostVtable>> = Rc::new(RefCell::new(NoHost));
+        let host: Rc<RefCell<dyn HostVtable>> = Rc::new(RefCell::new(MiniUiHost::new()));
         let embed = Embed::run_source_with_modules(
             concat!(
                 "from ui import view\n",
@@ -1251,7 +1492,7 @@ mod tests {
 
     #[test]
     fn two_view_classes_in_entry_are_an_error() {
-        let host: Rc<RefCell<dyn HostVtable>> = Rc::new(RefCell::new(NoHost));
+        let host: Rc<RefCell<dyn HostVtable>> = Rc::new(RefCell::new(MiniUiHost::new()));
         let embed = Embed::run_source(
             concat!(
                 "from ui import view\n",
@@ -1282,18 +1523,25 @@ mod tests {
     }
 
     #[test]
-    fn ui_exports_host_names() {
+    fn from_ui_without_host_is_module_not_found() {
         let host: Rc<RefCell<dyn HostVtable>> = Rc::new(RefCell::new(NoHost));
+        let err = match Embed::run_source("from ui import view\n".into(), "main.py", host) {
+            Ok(_) => panic!("from ui import without host must fail"),
+            Err(err) => err,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("ui") || msg.to_lowercase().contains("module"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn ui_exports_view_and_button() {
+        let host: Rc<RefCell<dyn HostVtable>> = Rc::new(RefCell::new(MiniUiHost::new()));
         let mut embed = Embed::run_source(
             concat!(
-                "from ui import view, window, localStorage, sessionStorage, fs, process, http, websocket\n",
-                "from ui import (\n",
-                "    v_flex, h_flex, div, svg, image,\n",
-                "    v_virtual_list, h_virtual_list,\n",
-                "    Button, Checkbox, Switch, Link,\n",
-                "    InputState, TextareaState, Input, Textarea,\n",
-                "    DockArea, dock_area, dock_content,\n",
-                ")\n",
+                "from ui import view, Button\n",
                 "def check():\n",
                 "    return 1\n",
             )
@@ -1336,66 +1584,9 @@ mod tests {
         );
     }
 
-    struct PendingHost {
-        pending: Option<(HeapId, Vec<HostValue>)>,
-    }
-
-    impl HostVtable for PendingHost {
-        fn call_attr(
-            &mut self,
-            ctx: &mut dyn HostCtx,
-            _id: HeapId,
-            _obj: HostObject,
-            attr: &str,
-            args: Vec<HostValue>,
-            _kwargs: Vec<(String, HostValue)>,
-        ) -> Result<HostValue, String> {
-            match attr {
-                "new" => {
-                    let id = ctx.alloc(HostObject {
-                        kind: KIND_ELEMENT,
-                        data: 1,
-                    });
-                    Ok(HostValue::Heap(id))
-                }
-                "hover" => {
-                    let Some(HostValue::Heap(cb)) = args.first() else {
-                        return Err("hover expects a callable".into());
-                    };
-                    self.pending = Some((*cb, vec![HostValue::Int(41)]));
-                    Ok(HostValue::Int(0))
-                }
-                other => Err(format!("no host method {other}")),
-            }
-        }
-
-        fn getattr(
-            &mut self,
-            _ctx: &mut dyn HostCtx,
-            _id: HeapId,
-            _obj: HostObject,
-            _attr: &str,
-        ) -> Result<Option<HostValue>, String> {
-            Ok(None)
-        }
-
-        fn construct(
-            &mut self,
-            _ctx: &mut dyn HostCtx,
-            name: &str,
-            _args: Vec<HostValue>,
-        ) -> Result<HostValue, String> {
-            Err(format!("no host constructor {name}"))
-        }
-
-        fn take_pending_replace(&mut self) -> Option<(HeapId, Vec<HostValue>)> {
-            self.pending.take()
-        }
-    }
-
     #[test]
     fn pending_replace_runs_after_call_attr() {
-        let host: Rc<RefCell<dyn HostVtable>> = Rc::new(RefCell::new(PendingHost { pending: None }));
+        let host: Rc<RefCell<dyn HostVtable>> = Rc::new(RefCell::new(MiniUiHost::new()));
         let mut embed = Embed::run_source(
             concat!(
                 "from ui import Button\n",

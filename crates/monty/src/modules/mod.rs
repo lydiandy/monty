@@ -83,10 +83,11 @@ pub(crate) enum StandardLib {
     /// Former host widget constructors. Discriminant kept so dump `LoadModule`
     /// ids do not shift. Scripts import [`StandardLib::Ui`].
     GpuiBase,
-    /// Host UI module (`from ui import view, v_flex, Button`). Provided for
-    /// monty-ui; production Monty still has no `sys.path`.
+    /// Former host UI module. Discriminant kept so dump `LoadModule` ids do
+    /// not shift. Scripts import `ui` via host registration, not StandardLib.
     Ui,
-    /// Host database package (`from db import turso`). Gc 之前追加。
+    /// Former host database package. Discriminant kept so dump `LoadModule`
+    /// ids do not shift. Scripts import `db` via host registration.
     Db,
     /// The `gc` module exposing a single `collect()` for tests. Only present
     /// under the `test-hooks` feature so production sandboxes never see it.
@@ -119,8 +120,6 @@ impl StandardLib {
             StaticStrings::Functools => Some(Self::Functools),
             StaticStrings::Base64 => Some(Self::Base64),
             StaticStrings::Binascii => Some(Self::Binascii),
-            StaticStrings::Ui => Some(Self::Ui),
-            StaticStrings::Db => Some(Self::Db),
             #[cfg(feature = "test-hooks")]
             StaticStrings::Gc => Some(Self::Gc),
             _ => None,

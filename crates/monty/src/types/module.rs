@@ -80,8 +80,12 @@ impl<'h> HeapRead<'h, Module> {
 
     /// Sets a module attribute, dropping any previous value.
     pub fn set_attr(&mut self, name: impl Into<crate::intern::StringId>, value: Value, vm: &mut VM<'h>) {
-        let key = Value::InternString(name.into());
-        match self.attrs_mut().set(key, value, vm) {
+        self.set_attr_key(Value::InternString(name.into()), value, vm);
+    }
+
+    /// Sets a module attribute from a heap/intern key, dropping any previous value.
+    pub fn set_attr_key(&mut self, name: Value, value: Value, vm: &mut VM<'h>) {
+        match self.attrs_mut().set(name, value, vm) {
             Ok(Some(old)) => old.drop_with(vm),
             Ok(None) => {}
             Err(_) => {}

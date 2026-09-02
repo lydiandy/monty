@@ -96,6 +96,12 @@ impl HostModuleRegistry {
         }
     }
 
+    /// Cache a native host module (no Python body).
+    pub fn cache_native(&self, name: &str, module_id: HeapId) {
+        self.begin_load(name, module_id);
+        self.finish_load(name);
+    }
+
     /// A fully-executed host module that owns `id`, if any.
     pub fn loaded_for_function(&self, id: FunctionId) -> Option<(HeapId, &HostModuleSpec)> {
         let idx = u32::try_from(id.index()).ok()?;

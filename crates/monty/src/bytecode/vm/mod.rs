@@ -1881,7 +1881,9 @@ impl<'h> VM<'h> {
         self.push(Value::Ref(heap_id));
     }
 
-    /// Loads a host-registered app module (`from widgets import button`).
+    /// Loads a host-registered module (`from widgets import button`).
+    ///
+    /// Order: cached → native host module → app-dir `.py` → `ModuleNotFoundError`.
     fn load_host_module(&mut self, const_idx: u16) -> RunResult<()> {
         let module_name = self.current_frame.code.constants().get(const_idx);
         let (name_id, name) = match module_name {
@@ -1891,15 +1893,26 @@ impl<'h> VM<'h> {
             }
         };
 
+        if let Some(host_modules) = self.host_modules {
+            if let Some(rt) = host_modules.cached(&name) {
+                self.heap.inc_ref(rt.module_id);
+                self.push(Value::Ref(rt.module_id));
+                return Ok(());
+            }
+        }
+
+        if let Some(module_id) = crate::embed::dispatch_create_native_module(self, &name)? {
+            if let Some(host_modules) = self.host_modules {
+                host_modules.cache_native(&name, module_id);
+            }
+            self.heap.inc_ref(module_id);
+            self.push(Value::Ref(module_id));
+            return Ok(());
+        }
+
         let host_modules = self
             .host_modules
             .ok_or_else(|| ExcType::module_not_found_error(&name))?;
-
-        if let Some(rt) = host_modules.cached(&name) {
-            self.heap.inc_ref(rt.module_id);
-            self.push(Value::Ref(rt.module_id));
-            return Ok(());
-        }
 
         let spec = host_modules
             .get(&name)

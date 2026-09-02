@@ -1,8 +1,5 @@
-//! `db` package (`from db import turso`).
-//!
-//! `turso` is a host object (`KIND_TURSO_CONN`, `data == 0`). Connections,
-//! `KIND_DB_QUERY` and `KIND_DB_TABLE` chains run in monty-ui. This crate only
-//! hangs the module and KIND. Do not export `orm`.
+//! Former `db` package. Discriminant and KIND numbers remain so dumps keep
+//! their ids. Live `from db import` is registered by the embedder.
 
 use crate::{
     bytecode::VM,
