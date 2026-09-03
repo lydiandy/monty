@@ -12,8 +12,8 @@ use crate::{
     intern::{Interns, StaticStrings, StringId},
     modules::collections,
     types::{
-        AttrCallResult, Bytes, Deque, Dict, FrozenSet, List, LongInt, Path, PyTrait, Range, Set, Slice, Str, TimeZone,
-        Tuple,
+        AttrCallResult, Bytes, Deque, Dict, FrozenSet, List, LongInt, Partial, Path, PyTrait, Range, Set, Slice, Str,
+        TimeZone, Tuple,
         bytes::{bytes_fromhex, bytes_repr},
         date, datetime,
         dict::{DictKind, dict_fromkeys},
@@ -61,10 +61,17 @@ pub enum Type {
     Float,
     Range,
     Slice,
+    /// The four `datetime` classes are qualified like `collections.deque`:
+    /// this is the `tp_name` CPython gives these C types, so it is the
+    /// spelling its reprs and type-naming error messages use. `__name__`
+    /// reports the bare name, see `dunder_name`.
+    #[strum(serialize = "datetime.date")]
     Date,
     #[strum(serialize = "datetime.datetime")]
     DateTime,
+    #[strum(serialize = "datetime.timedelta")]
     TimeDelta,
+    #[strum(serialize = "datetime.timezone")]
     TimeZone,
     Str,
     Bytes,
@@ -87,7 +94,13 @@ pub enum Type {
     DictValues,
     Set,
     FrozenSet,
-    Dataclass,
+    /// The type of a host-backed class instance ([`HeapData::HostClass`]),
+    /// for internal dispatch only: `type(x)` materializes a `HostClassType`
+    /// instead, so it never reaches Python code or the host boundary.
+    ///
+    /// [`HeapData::HostClass`]: crate::heap::HeapData::HostClass
+    #[strum(serialize = "HostClass")]
+    HostClass,
     /// An instance of a user-defined class (`class Foo: ...`), carrying the
     /// `HeapId` of its class object so the real class name can be resolved
     /// (via [`Type::name`]) for error messages and reprs. The class
@@ -178,8 +191,8 @@ pub enum Type {
     #[strum(serialize = "Field")]
     DataclassField,
     /// `collections.deque` — qualified like `datetime.datetime`/`re.Pattern` so
-    /// the name matches CPython's `repr` and error messages; only `__name__`
-    /// diverges from CPython's bare `'deque'`. See `limitations/collections.md`.
+    /// the name matches CPython's `repr` and error messages; `__name__` reports
+    /// the bare `'deque'`, see `dunder_name`.
     #[strum(serialize = "collections.deque")]
     Deque,
     /// `iter(deque(...))` — CPython's `_collections._deque_iterator`.
@@ -213,6 +226,10 @@ pub enum Type {
     Object,
     #[strum(serialize = "datetime.time")]
     Time,
+    /// `functools.partial` — qualified like `collections.deque`, so
+    /// `type(p)` reads `<class 'functools.partial'>`.
+    #[strum(serialize = "functools.partial")]
+    Partial,
     /// Host object allocated by an embedder (gpui-monty).
     #[strum(serialize = "gpui.Object")]
     HostObject,
@@ -257,6 +274,19 @@ impl Type {
             Self::Instance(class_id) => class_name(class_id, heap, interns),
             Self::Exception(exc_type) => Cow::Borrowed(exc_type.into()),
             other => Cow::Borrowed(other.into()),
+        }
+    }
+
+    /// The name CPython's `__name__` reports: [`name`](Self::name) with any
+    /// module qualifier stripped (`datetime.date` → `date`). CPython keeps one
+    /// dotted `tp_name` per C type and derives the bare `__name__` from it, so
+    /// reprs and error messages qualify where `__name__` does not. Sandbox
+    /// class names ([`Instance`](Self::Instance)) are identifiers, so
+    /// stripping is a no-op for them.
+    pub(crate) fn dunder_name<'i>(self, heap: &Heap, interns: &'i Interns) -> Cow<'i, str> {
+        match self.name(heap, interns) {
+            Cow::Borrowed(name) => Cow::Borrowed(name.rsplit_once('.').map_or(name, |(_, bare)| bare)),
+            owned @ Cow::Owned(_) => owned,
         }
     }
 
@@ -523,6 +553,7 @@ impl Type {
             Self::TimeZone => TimeZone::init(vm, args),
             Self::Iterator => super::iter::init(vm, args),
             Self::Path => Path::init(vm, args),
+            Self::Partial => Partial::init(vm, args),
 
             // Primitive types - inline implementation
             Self::Int => int_init(vm, args),

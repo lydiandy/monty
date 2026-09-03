@@ -1121,6 +1121,12 @@ pub enum StaticStrings {
     Tzname,
     /// `timespec` keyword of `time.isoformat()`.
     Timespec,
+    /// `functools.partial` type.
+    Partial,
+    /// `partial.func` attribute.
+    Func,
+    /// `partial.keywords` attribute.
+    Keywords,
 
     // --- gpui-monty 嵌入（只追加；dump 判别式稳定） ---
     /// `gpui` host module.

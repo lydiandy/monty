@@ -11,20 +11,19 @@ use std::{cell::RefCell, mem, rc::Rc};
 
 use monty_types::{CompileOptions, MontyException, PrintWriter, ResourceTracker};
 
+pub use crate::host_modules::HostModuleSource;
 use crate::{
     args::{ArgValues, KwargsValues},
     bytecode::{CallResult, VM},
     exception_private::{ExcType, RunError, RunResult, SimpleException},
     heap::{Heap, HeapData, HeapId, HeapObjectRead, HeapReader},
     heap_data::FunctionDefaults,
+    intern::StaticStrings,
     modules::ModuleFunctions,
     run::Executor,
-    intern::StaticStrings,
     types::{Bytes, Dict, Instance, List, Module, PyTrait, Type, allocate_string},
     value::{EitherStr, Value},
 };
-
-pub use crate::host_modules::HostModuleSource;
 
 /// Element handle recorded into a spec arena.
 pub const KIND_ELEMENT: u16 = 1;
@@ -374,11 +373,7 @@ pub trait HostVtable: 'static {
     fn construct(&mut self, ctx: &mut dyn HostCtx, name: &str, args: Vec<HostValue>) -> Result<HostValue, String>;
 
     /// Native module for `from {name} import …`. Default: none (fall through to app-dir `.py`).
-    fn create_native_module(
-        &mut self,
-        _ctx: &mut dyn HostCtx,
-        _name: &str,
-    ) -> Result<Option<HeapId>, String> {
+    fn create_native_module(&mut self, _ctx: &mut dyn HostCtx, _name: &str) -> Result<Option<HeapId>, String> {
         Ok(None)
     }
 
@@ -832,12 +827,7 @@ pub(crate) fn dispatch_construct(vm: &mut VM<'_>, name: &str, args: ArgValues) -
     Ok(host_value_to_value(ctx.vm, result))
 }
 
-pub(crate) fn dispatch_call(
-    vm: &mut VM<'_>,
-    id: HeapId,
-    obj: HostObject,
-    args: ArgValues,
-) -> RunResult<CallResult> {
+pub(crate) fn dispatch_call(vm: &mut VM<'_>, id: HeapId, obj: HostObject, args: ArgValues) -> RunResult<CallResult> {
     if obj.kind == KIND_BOXED_MODULE_FN {
         let mf = unpack_module_function(obj.data);
         return mf.call(vm, args);
@@ -1293,11 +1283,7 @@ mod tests {
             Err(format!("no host constructor {name}"))
         }
 
-        fn create_native_module(
-            &mut self,
-            ctx: &mut dyn HostCtx,
-            name: &str,
-        ) -> Result<Option<HeapId>, String> {
+        fn create_native_module(&mut self, ctx: &mut dyn HostCtx, name: &str) -> Result<Option<HeapId>, String> {
             if name != "ui" {
                 return Ok(None);
             }
@@ -1540,12 +1526,7 @@ mod tests {
     fn ui_exports_view_and_button() {
         let host: Rc<RefCell<dyn HostVtable>> = Rc::new(RefCell::new(MiniUiHost::new()));
         let mut embed = Embed::run_source(
-            concat!(
-                "from ui import view, Button\n",
-                "def check():\n",
-                "    return 1\n",
-            )
-            .into(),
+            concat!("from ui import view, Button\n", "def check():\n", "    return 1\n",).into(),
             "main.py",
             host,
         )
