@@ -10,7 +10,6 @@ use crate::{
     },
     exception_private::RunResult,
     heap::{HeapData, HeapId},
-    intern::StaticStrings,
     modules::ModuleFunctions,
     types::Module,
     value::Value,
@@ -61,97 +60,34 @@ pub(crate) enum GpuiBaseFunctions {
 
 /// Creates the `gpui_base` module.
 pub fn create_module(vm: &mut VM<'_>) -> HeapId {
-    let mut module = Module::new(StaticStrings::GpuiBase);
-    module.set_attr(
-        StaticStrings::VFlex,
-        Value::ModuleFunction(ModuleFunctions::GpuiBase(GpuiBaseFunctions::VFlex)),
-        vm,
-    );
-    module.set_attr(
-        StaticStrings::HFlex,
-        Value::ModuleFunction(ModuleFunctions::GpuiBase(GpuiBaseFunctions::HFlex)),
-        vm,
-    );
-    module.set_attr(
-        StaticStrings::Div,
-        Value::ModuleFunction(ModuleFunctions::GpuiBase(GpuiBaseFunctions::Div)),
-        vm,
-    );
-    module.set_attr(
-        StaticStrings::Svg,
-        Value::ModuleFunction(ModuleFunctions::GpuiBase(GpuiBaseFunctions::Svg)),
-        vm,
-    );
-    module.set_attr(
-        StaticStrings::Image,
-        Value::ModuleFunction(ModuleFunctions::GpuiBase(GpuiBaseFunctions::Image)),
-        vm,
-    );
-    module.set_attr(
-        StaticStrings::VVirtualList,
-        Value::ModuleFunction(ModuleFunctions::GpuiBase(GpuiBaseFunctions::VVirtualList)),
-        vm,
-    );
-    module.set_attr(
-        StaticStrings::HVirtualList,
-        Value::ModuleFunction(ModuleFunctions::GpuiBase(GpuiBaseFunctions::HVirtualList)),
-        vm,
-    );
-    let button_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
-        kind: KIND_BUTTON_TYPE,
-        data: 0,
-    }));
-    module.set_attr(StaticStrings::Button, Value::Ref(button_ty), vm);
-    let checkbox_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
-        kind: KIND_CHECKBOX_TYPE,
-        data: 0,
-    }));
-    module.set_attr(StaticStrings::Checkbox, Value::Ref(checkbox_ty), vm);
-    let switch_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
-        kind: KIND_SWITCH_TYPE,
-        data: 0,
-    }));
-    module.set_attr(StaticStrings::Switch, Value::Ref(switch_ty), vm);
-    let link_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
-        kind: KIND_LINK_TYPE,
-        data: 0,
-    }));
-    module.set_attr(StaticStrings::Link, Value::Ref(link_ty), vm);
-    let input_state_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
-        kind: KIND_INPUT_STATE_TYPE,
-        data: 0,
-    }));
-    module.set_attr(StaticStrings::InputState, Value::Ref(input_state_ty), vm);
-    let textarea_state_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
-        kind: KIND_TEXTAREA_STATE_TYPE,
-        data: 0,
-    }));
-    module.set_attr(StaticStrings::TextareaState, Value::Ref(textarea_state_ty), vm);
-    let input_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
-        kind: KIND_INPUT_TYPE,
-        data: 0,
-    }));
-    module.set_attr(StaticStrings::Input, Value::Ref(input_ty), vm);
-    let textarea_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
-        kind: KIND_TEXTAREA_TYPE,
-        data: 0,
-    }));
-    module.set_attr(StaticStrings::Textarea, Value::Ref(textarea_ty), vm);
-    module.set_attr(
-        StaticStrings::DockAreaFn,
-        Value::ModuleFunction(ModuleFunctions::GpuiBase(GpuiBaseFunctions::DockArea)),
-        vm,
-    );
-    module.set_attr(
-        StaticStrings::DockContent,
-        Value::ModuleFunction(ModuleFunctions::GpuiBase(GpuiBaseFunctions::DockContent)),
-        vm,
-    );
-    let dock_area_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
-        kind: KIND_DOCK_AREA_TYPE,
-        data: 0,
-    }));
-    module.set_attr(StaticStrings::DockArea, Value::Ref(dock_area_ty), vm);
+    let mut module = Module::named(vm, "gpui_base");
+    for (name, function) in [
+        ("v_flex", GpuiBaseFunctions::VFlex),
+        ("h_flex", GpuiBaseFunctions::HFlex),
+        ("div", GpuiBaseFunctions::Div),
+        ("svg", GpuiBaseFunctions::Svg),
+        ("image", GpuiBaseFunctions::Image),
+        ("v_virtual_list", GpuiBaseFunctions::VVirtualList),
+        ("h_virtual_list", GpuiBaseFunctions::HVirtualList),
+        ("dock_area", GpuiBaseFunctions::DockArea),
+        ("dock_content", GpuiBaseFunctions::DockContent),
+    ] {
+        module.set_attr_str(name, Value::ModuleFunction(ModuleFunctions::GpuiBase(function)), vm);
+    }
+    for (name, kind) in [
+        ("Button", KIND_BUTTON_TYPE),
+        ("Checkbox", KIND_CHECKBOX_TYPE),
+        ("Switch", KIND_SWITCH_TYPE),
+        ("Link", KIND_LINK_TYPE),
+        ("InputState", KIND_INPUT_STATE_TYPE),
+        ("TextareaState", KIND_TEXTAREA_STATE_TYPE),
+        ("Input", KIND_INPUT_TYPE),
+        ("Textarea", KIND_TEXTAREA_TYPE),
+        ("DockArea", KIND_DOCK_AREA_TYPE),
+    ] {
+        let ty = vm.heap.allocate(HeapData::HostObject(HostObject { kind, data: 0 }));
+        module.set_attr_str(name, Value::Ref(ty), vm);
+    }
     vm.heap.allocate(HeapData::Module(Box::new(module)))
 }
 

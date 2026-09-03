@@ -25,7 +25,6 @@ use crate::{
     },
     exception_private::RunResult,
     heap::{HeapData, HeapId},
-    intern::StaticStrings,
     modules::{ModuleFunctions, gpui, gpui_base},
     types::Module,
     value::Value,
@@ -62,390 +61,138 @@ impl std::fmt::Display for UiFunctions {
 
 /// Creates the `ui` module.
 pub fn create_module(vm: &mut VM<'_>) -> HeapId {
-    let mut module = Module::new(StaticStrings::Ui);
-    module.set_attr(
-        StaticStrings::View,
+    let mut module = Module::named(vm, "ui");
+    module.set_attr_str(
+        "view",
         Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Runtime(gpui::GpuiFunctions::View))),
         vm,
     );
-    let window = vm.heap.allocate(HeapData::HostObject(HostObject {
-        kind: KIND_WINDOW,
-        data: 0,
-    }));
-    module.set_attr(StaticStrings::Window, Value::Ref(window), vm);
-    let local_storage = vm.heap.allocate(HeapData::HostObject(HostObject {
-        kind: KIND_STORAGE,
-        data: 0,
-    }));
-    module.set_attr(StaticStrings::LocalStorage, Value::Ref(local_storage), vm);
-    let session_storage = vm.heap.allocate(HeapData::HostObject(HostObject {
-        kind: KIND_STORAGE,
-        data: 1,
-    }));
-    module.set_attr(StaticStrings::SessionStorage, Value::Ref(session_storage), vm);
-    let fs = vm
-        .heap
-        .allocate(HeapData::HostObject(HostObject { kind: KIND_FS, data: 0 }));
-    module.set_attr(StaticStrings::Fs, Value::Ref(fs), vm);
-    let process = vm.heap.allocate(HeapData::HostObject(HostObject {
-        kind: KIND_PROCESS,
-        data: 0,
-    }));
-    module.set_attr(StaticStrings::Process, Value::Ref(process), vm);
-    let http = vm.heap.allocate(HeapData::HostObject(HostObject {
-        kind: KIND_HTTP,
-        data: 0,
-    }));
-    module.set_attr(StaticStrings::Http, Value::Ref(http), vm);
-    let websocket = vm.heap.allocate(HeapData::HostObject(HostObject {
-        kind: KIND_WEBSOCKET,
-        data: 0,
-    }));
-    module.set_attr(StaticStrings::Websocket, Value::Ref(websocket), vm);
-    let net = vm.heap.allocate(HeapData::HostObject(HostObject {
-        kind: KIND_NET,
-        data: 0,
-    }));
-    module.set_attr(StaticStrings::Net, Value::Ref(net), vm);
-
-    module.set_attr(
-        StaticStrings::VFlex,
-        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
-            gpui_base::GpuiBaseFunctions::VFlex,
-        ))),
-        vm,
-    );
-    module.set_attr(
-        StaticStrings::HFlex,
-        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
-            gpui_base::GpuiBaseFunctions::HFlex,
-        ))),
-        vm,
-    );
-    module.set_attr(
-        StaticStrings::Div,
-        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
-            gpui_base::GpuiBaseFunctions::Div,
-        ))),
-        vm,
-    );
-    module.set_attr(
-        StaticStrings::Svg,
-        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
-            gpui_base::GpuiBaseFunctions::Svg,
-        ))),
-        vm,
-    );
-    module.set_attr(
-        StaticStrings::Image,
-        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
-            gpui_base::GpuiBaseFunctions::Image,
-        ))),
-        vm,
-    );
-    module.set_attr(
-        StaticStrings::VVirtualList,
-        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
-            gpui_base::GpuiBaseFunctions::VVirtualList,
-        ))),
-        vm,
-    );
-    module.set_attr(
-        StaticStrings::HVirtualList,
-        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
-            gpui_base::GpuiBaseFunctions::HVirtualList,
-        ))),
-        vm,
-    );
-    let button_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
-        kind: KIND_BUTTON_TYPE,
-        data: 0,
-    }));
-    module.set_attr(StaticStrings::Button, Value::Ref(button_ty), vm);
-    let checkbox_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
-        kind: KIND_CHECKBOX_TYPE,
-        data: 0,
-    }));
-    module.set_attr(StaticStrings::Checkbox, Value::Ref(checkbox_ty), vm);
-    let switch_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
-        kind: KIND_SWITCH_TYPE,
-        data: 0,
-    }));
-    module.set_attr(StaticStrings::Switch, Value::Ref(switch_ty), vm);
-    let link_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
-        kind: KIND_LINK_TYPE,
-        data: 0,
-    }));
-    module.set_attr(StaticStrings::Link, Value::Ref(link_ty), vm);
-    let input_state_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
-        kind: KIND_INPUT_STATE_TYPE,
-        data: 0,
-    }));
-    module.set_attr(StaticStrings::InputState, Value::Ref(input_state_ty), vm);
-    let textarea_state_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
-        kind: KIND_TEXTAREA_STATE_TYPE,
-        data: 0,
-    }));
-    module.set_attr(StaticStrings::TextareaState, Value::Ref(textarea_state_ty), vm);
-    let input_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
-        kind: KIND_INPUT_TYPE,
-        data: 0,
-    }));
-    module.set_attr(StaticStrings::Input, Value::Ref(input_ty), vm);
-    let textarea_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
-        kind: KIND_TEXTAREA_TYPE,
-        data: 0,
-    }));
-    module.set_attr(StaticStrings::Textarea, Value::Ref(textarea_ty), vm);
-    module.set_attr(
-        StaticStrings::DockAreaFn,
-        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
-            gpui_base::GpuiBaseFunctions::DockArea,
-        ))),
-        vm,
-    );
-    module.set_attr(
-        StaticStrings::DockContent,
-        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
-            gpui_base::GpuiBaseFunctions::DockContent,
-        ))),
-        vm,
-    );
-    let dock_area_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
-        kind: KIND_DOCK_AREA_TYPE,
-        data: 0,
-    }));
-    module.set_attr(StaticStrings::DockArea, Value::Ref(dock_area_ty), vm);
-    module.set_attr(
-        StaticStrings::SetTheme,
-        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Theme(ThemeFunctions::SetTheme))),
-        vm,
-    );
-    module.set_attr(
-        StaticStrings::ListThemes,
-        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Theme(ThemeFunctions::ListThemes))),
-        vm,
-    );
-    let path_builder_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
-        kind: KIND_PATH_BUILDER_TYPE,
-        data: 0,
-    }));
-    module.set_attr(StaticStrings::PathBuilder, Value::Ref(path_builder_ty), vm);
-    let background_ty = vm.heap.allocate(HeapData::HostObject(HostObject {
-        kind: KIND_BACKGROUND_TYPE,
-        data: 0,
-    }));
-    module.set_attr(StaticStrings::Background, Value::Ref(background_ty), vm);
-    export_type(vm, &mut module, StaticStrings::FocusHandle, KIND_FOCUS_HANDLE_TYPE);
-    export_type(vm, &mut module, StaticStrings::NumberInput, KIND_NUMBER_INPUT_TYPE);
-    export_type(vm, &mut module, StaticStrings::OtpInput, KIND_OTP_INPUT_TYPE);
-    export_type(vm, &mut module, StaticStrings::OtpState, KIND_OTP_STATE_TYPE);
-    export_type(vm, &mut module, StaticStrings::Slider, KIND_SLIDER_TYPE);
-    export_type(vm, &mut module, StaticStrings::SliderTrack, KIND_SLIDER_TRACK_TYPE);
-    export_type(
-        vm,
-        &mut module,
-        StaticStrings::SliderIndicator,
-        KIND_SLIDER_INDICATOR_TYPE,
-    );
-    export_type(vm, &mut module, StaticStrings::SliderThumb, KIND_SLIDER_THUMB_TYPE);
-    export_type(vm, &mut module, StaticStrings::SliderState, KIND_SLIDER_STATE_TYPE);
-    export_type(vm, &mut module, StaticStrings::Progress, KIND_PROGRESS_TYPE);
-    export_type(vm, &mut module, StaticStrings::ProgressTrack, KIND_PROGRESS_TRACK_TYPE);
-    export_type(
-        vm,
-        &mut module,
-        StaticStrings::ProgressIndicator,
-        KIND_PROGRESS_INDICATOR_TYPE,
-    );
-    export_type(vm, &mut module, StaticStrings::Avatar, KIND_AVATAR_TYPE);
-    export_type(vm, &mut module, StaticStrings::AvatarImage, KIND_AVATAR_IMAGE_TYPE);
-    export_type(
-        vm,
-        &mut module,
-        StaticStrings::AvatarFallback,
-        KIND_AVATAR_FALLBACK_TYPE,
-    );
-    export_type(vm, &mut module, StaticStrings::Pagination, KIND_PAGINATION_TYPE);
-    export_type(vm, &mut module, StaticStrings::Tabs, KIND_TABS_TYPE);
-    export_type(vm, &mut module, StaticStrings::Tab, KIND_TAB_TYPE);
-    export_type(vm, &mut module, StaticStrings::Accordion, KIND_ACCORDION_TYPE);
-    export_type(vm, &mut module, StaticStrings::AccordionItem, KIND_ACCORDION_ITEM_TYPE);
-    export_type(
-        vm,
-        &mut module,
-        StaticStrings::AccordionHeader,
-        KIND_ACCORDION_HEADER_TYPE,
-    );
-    export_type(
-        vm,
-        &mut module,
-        StaticStrings::AccordionPanel,
-        KIND_ACCORDION_PANEL_TYPE,
-    );
-    export_type(
-        vm,
-        &mut module,
-        StaticStrings::AccordionTrigger,
-        KIND_ACCORDION_TRIGGER_TYPE,
-    );
-    export_type(vm, &mut module, StaticStrings::Radio, KIND_RADIO_TYPE);
-    export_type(vm, &mut module, StaticStrings::RadioGroup, KIND_RADIO_GROUP_TYPE);
-    export_type(vm, &mut module, StaticStrings::Toggle, KIND_TOGGLE_TYPE);
-    export_type(vm, &mut module, StaticStrings::ToggleGroup, KIND_TOGGLE_GROUP_TYPE);
-    export_type(vm, &mut module, StaticStrings::Table, KIND_TABLE_TYPE);
-    export_type(vm, &mut module, StaticStrings::TableHeader, KIND_TABLE_HEADER_TYPE);
-    export_type(vm, &mut module, StaticStrings::TableBody, KIND_TABLE_BODY_TYPE);
-    export_type(vm, &mut module, StaticStrings::TableRow, KIND_TABLE_ROW_TYPE);
-    export_type(vm, &mut module, StaticStrings::TableHead, KIND_TABLE_HEAD_TYPE);
-    export_type(vm, &mut module, StaticStrings::TableCell, KIND_TABLE_CELL_TYPE);
-    export_type(vm, &mut module, StaticStrings::TableCaption, KIND_TABLE_CAPTION_TYPE);
-    export_type(vm, &mut module, StaticStrings::Collapsible, KIND_COLLAPSIBLE_TYPE);
-    export_type(vm, &mut module, StaticStrings::Popover, KIND_POPOVER_TYPE);
-    export_type(vm, &mut module, StaticStrings::HoverCard, KIND_HOVER_CARD_TYPE);
-    export_type(vm, &mut module, StaticStrings::Popup, KIND_POPUP_TYPE);
-    export_type(vm, &mut module, StaticStrings::Select, KIND_SELECT_TYPE);
-    export_type(vm, &mut module, StaticStrings::Combobox, KIND_COMBOBOX_TYPE);
-    export_type(vm, &mut module, StaticStrings::DatePicker, KIND_DATE_PICKER_TYPE);
-    export_type(vm, &mut module, StaticStrings::CalendarState, KIND_CALENDAR_STATE_TYPE);
-    export_type(vm, &mut module, StaticStrings::Calendar, KIND_CALENDAR_TYPE);
-    export_type(vm, &mut module, StaticStrings::ColorPicker, KIND_COLOR_PICKER_TYPE);
-    export_type(
-        vm,
-        &mut module,
-        StaticStrings::ColorPickerState,
-        KIND_COLOR_PICKER_STATE_TYPE,
-    );
-    export_type(vm, &mut module, StaticStrings::ColorSwatch, KIND_COLOR_SWATCH_TYPE);
-    export_type(vm, &mut module, StaticStrings::Tree, KIND_TREE_TYPE);
-    export_type(vm, &mut module, StaticStrings::TreeState, KIND_TREE_STATE_TYPE);
-    export_type(vm, &mut module, StaticStrings::AlertDialog, KIND_ALERT_DIALOG_TYPE);
-    export_type(
-        vm,
-        &mut module,
-        StaticStrings::AlertDialogTrigger,
-        KIND_ALERT_DIALOG_TRIGGER_TYPE,
-    );
-    export_type(
-        vm,
-        &mut module,
-        StaticStrings::AlertDialogPopup,
-        KIND_ALERT_DIALOG_POPUP_TYPE,
-    );
-    export_type(
-        vm,
-        &mut module,
-        StaticStrings::AlertDialogTitle,
-        KIND_ALERT_DIALOG_TITLE_TYPE,
-    );
-    export_type(
-        vm,
-        &mut module,
-        StaticStrings::AlertDialogDescription,
-        KIND_ALERT_DIALOG_DESCRIPTION_TYPE,
-    );
-    export_type(
-        vm,
-        &mut module,
-        StaticStrings::AlertDialogAction,
-        KIND_ALERT_DIALOG_ACTION_TYPE,
-    );
-    export_type(
-        vm,
-        &mut module,
-        StaticStrings::AlertDialogCancel,
-        KIND_ALERT_DIALOG_CANCEL_TYPE,
-    );
-    export_type(
-        vm,
-        &mut module,
-        StaticStrings::AlertDialogBackdrop,
-        KIND_ALERT_DIALOG_BACKDROP_TYPE,
-    );
-    export_type(
-        vm,
-        &mut module,
-        StaticStrings::AlertDialogClose,
-        KIND_ALERT_DIALOG_CLOSE_TYPE,
-    );
-    export_type(vm, &mut module, StaticStrings::Scrollbar, KIND_SCROLLBAR_TYPE);
-    export_type(vm, &mut module, StaticStrings::TextView, KIND_TEXT_VIEW_TYPE);
-    module.set_attr(
-        StaticStrings::PaginationItems,
-        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
-            gpui_base::GpuiBaseFunctions::PaginationItems,
-        ))),
-        vm,
-    );
-    module.set_attr(
-        StaticStrings::HResizable,
-        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
-            gpui_base::GpuiBaseFunctions::HResizable,
-        ))),
-        vm,
-    );
-    module.set_attr(
-        StaticStrings::VResizable,
-        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
-            gpui_base::GpuiBaseFunctions::VResizable,
-        ))),
-        vm,
-    );
-    module.set_attr(
-        StaticStrings::ResizablePanel,
-        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
-            gpui_base::GpuiBaseFunctions::ResizablePanel,
-        ))),
-        vm,
-    );
-    module.set_attr(
-        StaticStrings::Scene,
-        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
-            gpui_base::GpuiBaseFunctions::Scene,
-        ))),
-        vm,
-    );
-    module.set_attr(
-        StaticStrings::Node,
-        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
-            gpui_base::GpuiBaseFunctions::Node,
-        ))),
-        vm,
-    );
-    module.set_attr(
-        StaticStrings::Edge,
-        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
-            gpui_base::GpuiBaseFunctions::Edge,
-        ))),
-        vm,
-    );
-    module.set_attr(
-        StaticStrings::Play,
-        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
-            gpui_base::GpuiBaseFunctions::Play,
-        ))),
-        vm,
-    );
-    module.set_attr(
-        StaticStrings::Seq,
-        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
-            gpui_base::GpuiBaseFunctions::Seq,
-        ))),
-        vm,
-    );
-    module.set_attr(
-        StaticStrings::FpsMonitor,
-        Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(
-            gpui_base::GpuiBaseFunctions::FpsMonitor,
-        ))),
-        vm,
-    );
+    for (name, kind, data) in [
+        ("window", KIND_WINDOW, 0),
+        ("localStorage", KIND_STORAGE, 0),
+        ("sessionStorage", KIND_STORAGE, 1),
+        ("fs", KIND_FS, 0),
+        ("process", KIND_PROCESS, 0),
+        ("http", KIND_HTTP, 0),
+        ("websocket", KIND_WEBSOCKET, 0),
+        ("net", KIND_NET, 0),
+    ] {
+        let obj = vm.heap.allocate(HeapData::HostObject(HostObject { kind, data }));
+        module.set_attr_str(name, Value::Ref(obj), vm);
+    }
+    for (name, function) in [
+        ("v_flex", gpui_base::GpuiBaseFunctions::VFlex),
+        ("h_flex", gpui_base::GpuiBaseFunctions::HFlex),
+        ("div", gpui_base::GpuiBaseFunctions::Div),
+        ("svg", gpui_base::GpuiBaseFunctions::Svg),
+        ("image", gpui_base::GpuiBaseFunctions::Image),
+        ("v_virtual_list", gpui_base::GpuiBaseFunctions::VVirtualList),
+        ("h_virtual_list", gpui_base::GpuiBaseFunctions::HVirtualList),
+        ("dock_area", gpui_base::GpuiBaseFunctions::DockArea),
+        ("dock_content", gpui_base::GpuiBaseFunctions::DockContent),
+        ("pagination_items", gpui_base::GpuiBaseFunctions::PaginationItems),
+        ("h_resizable", gpui_base::GpuiBaseFunctions::HResizable),
+        ("v_resizable", gpui_base::GpuiBaseFunctions::VResizable),
+        ("resizable_panel", gpui_base::GpuiBaseFunctions::ResizablePanel),
+        ("scene", gpui_base::GpuiBaseFunctions::Scene),
+        ("node", gpui_base::GpuiBaseFunctions::Node),
+        ("edge", gpui_base::GpuiBaseFunctions::Edge),
+        ("play", gpui_base::GpuiBaseFunctions::Play),
+        ("seq", gpui_base::GpuiBaseFunctions::Seq),
+        ("fps_monitor", gpui_base::GpuiBaseFunctions::FpsMonitor),
+    ] {
+        module.set_attr_str(
+            name,
+            Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Widgets(function))),
+            vm,
+        );
+    }
+    for (name, function) in [
+        ("set_theme", ThemeFunctions::SetTheme),
+        ("list_themes", ThemeFunctions::ListThemes),
+    ] {
+        module.set_attr_str(
+            name,
+            Value::ModuleFunction(ModuleFunctions::Ui(UiFunctions::Theme(function))),
+            vm,
+        );
+    }
+    for (name, kind) in [
+        ("Button", KIND_BUTTON_TYPE),
+        ("Checkbox", KIND_CHECKBOX_TYPE),
+        ("Switch", KIND_SWITCH_TYPE),
+        ("Link", KIND_LINK_TYPE),
+        ("InputState", KIND_INPUT_STATE_TYPE),
+        ("TextareaState", KIND_TEXTAREA_STATE_TYPE),
+        ("Input", KIND_INPUT_TYPE),
+        ("Textarea", KIND_TEXTAREA_TYPE),
+        ("DockArea", KIND_DOCK_AREA_TYPE),
+        ("PathBuilder", KIND_PATH_BUILDER_TYPE),
+        ("Background", KIND_BACKGROUND_TYPE),
+        ("FocusHandle", KIND_FOCUS_HANDLE_TYPE),
+        ("NumberInput", KIND_NUMBER_INPUT_TYPE),
+        ("OtpInput", KIND_OTP_INPUT_TYPE),
+        ("OtpState", KIND_OTP_STATE_TYPE),
+        ("Slider", KIND_SLIDER_TYPE),
+        ("SliderTrack", KIND_SLIDER_TRACK_TYPE),
+        ("SliderIndicator", KIND_SLIDER_INDICATOR_TYPE),
+        ("SliderThumb", KIND_SLIDER_THUMB_TYPE),
+        ("SliderState", KIND_SLIDER_STATE_TYPE),
+        ("Progress", KIND_PROGRESS_TYPE),
+        ("ProgressTrack", KIND_PROGRESS_TRACK_TYPE),
+        ("ProgressIndicator", KIND_PROGRESS_INDICATOR_TYPE),
+        ("Avatar", KIND_AVATAR_TYPE),
+        ("AvatarImage", KIND_AVATAR_IMAGE_TYPE),
+        ("AvatarFallback", KIND_AVATAR_FALLBACK_TYPE),
+        ("Pagination", KIND_PAGINATION_TYPE),
+        ("Tabs", KIND_TABS_TYPE),
+        ("Tab", KIND_TAB_TYPE),
+        ("Accordion", KIND_ACCORDION_TYPE),
+        ("AccordionItem", KIND_ACCORDION_ITEM_TYPE),
+        ("AccordionHeader", KIND_ACCORDION_HEADER_TYPE),
+        ("AccordionPanel", KIND_ACCORDION_PANEL_TYPE),
+        ("AccordionTrigger", KIND_ACCORDION_TRIGGER_TYPE),
+        ("Radio", KIND_RADIO_TYPE),
+        ("RadioGroup", KIND_RADIO_GROUP_TYPE),
+        ("Toggle", KIND_TOGGLE_TYPE),
+        ("ToggleGroup", KIND_TOGGLE_GROUP_TYPE),
+        ("Table", KIND_TABLE_TYPE),
+        ("TableHeader", KIND_TABLE_HEADER_TYPE),
+        ("TableBody", KIND_TABLE_BODY_TYPE),
+        ("TableRow", KIND_TABLE_ROW_TYPE),
+        ("TableHead", KIND_TABLE_HEAD_TYPE),
+        ("TableCell", KIND_TABLE_CELL_TYPE),
+        ("TableCaption", KIND_TABLE_CAPTION_TYPE),
+        ("Collapsible", KIND_COLLAPSIBLE_TYPE),
+        ("Popover", KIND_POPOVER_TYPE),
+        ("HoverCard", KIND_HOVER_CARD_TYPE),
+        ("Popup", KIND_POPUP_TYPE),
+        ("Select", KIND_SELECT_TYPE),
+        ("Combobox", KIND_COMBOBOX_TYPE),
+        ("DatePicker", KIND_DATE_PICKER_TYPE),
+        ("CalendarState", KIND_CALENDAR_STATE_TYPE),
+        ("Calendar", KIND_CALENDAR_TYPE),
+        ("ColorPicker", KIND_COLOR_PICKER_TYPE),
+        ("ColorPickerState", KIND_COLOR_PICKER_STATE_TYPE),
+        ("ColorSwatch", KIND_COLOR_SWATCH_TYPE),
+        ("Tree", KIND_TREE_TYPE),
+        ("TreeState", KIND_TREE_STATE_TYPE),
+        ("AlertDialog", KIND_ALERT_DIALOG_TYPE),
+        ("AlertDialogTrigger", KIND_ALERT_DIALOG_TRIGGER_TYPE),
+        ("AlertDialogPopup", KIND_ALERT_DIALOG_POPUP_TYPE),
+        ("AlertDialogTitle", KIND_ALERT_DIALOG_TITLE_TYPE),
+        ("AlertDialogDescription", KIND_ALERT_DIALOG_DESCRIPTION_TYPE),
+        ("AlertDialogAction", KIND_ALERT_DIALOG_ACTION_TYPE),
+        ("AlertDialogCancel", KIND_ALERT_DIALOG_CANCEL_TYPE),
+        ("AlertDialogBackdrop", KIND_ALERT_DIALOG_BACKDROP_TYPE),
+        ("AlertDialogClose", KIND_ALERT_DIALOG_CLOSE_TYPE),
+        ("Scrollbar", KIND_SCROLLBAR_TYPE),
+        ("TextView", KIND_TEXT_VIEW_TYPE),
+    ] {
+        let ty = vm.heap.allocate(HeapData::HostObject(HostObject { kind, data: 0 }));
+        module.set_attr_str(name, Value::Ref(ty), vm);
+    }
     vm.heap.allocate(HeapData::Module(Box::new(module)))
-}
-
-fn export_type(vm: &mut VM<'_>, module: &mut Module, name: StaticStrings, kind: u16) {
-    let ty = vm.heap.allocate(HeapData::HostObject(HostObject { kind, data: 0 }));
-    module.set_attr(name, Value::Ref(ty), vm);
 }
 
 pub(super) fn call(vm: &mut VM<'_>, function: UiFunctions, args: ArgValues) -> RunResult<Value> {

@@ -18,7 +18,6 @@ use crate::{
     exception_private::{ExcType, RunError, RunResult, SimpleException},
     heap::{Heap, HeapData, HeapId, HeapObjectRead, HeapReader},
     heap_data::FunctionDefaults,
-    intern::StaticStrings,
     modules::ModuleFunctions,
     run::Executor,
     types::{Bytes, Dict, Instance, List, Module, PyTrait, Type, allocate_string},
@@ -1013,7 +1012,7 @@ impl HostCtx for VmHostCtx<'_, '_> {
     fn mark_view_class(&mut self, class: HeapId) -> Result<(), String> {
         match self.vm.heap.read(class) {
             crate::heap::HeapReadOutput::Class(mut class) => class
-                .py_set_attr(&EitherStr::from(StaticStrings::GpuiView), Value::Bool(true), self.vm)
+                .py_set_attr(&EitherStr::from("__gpui_view__".to_owned()), Value::Bool(true), self.vm)
                 .map_err(|error| format!("{error:?}")),
             _ => Err("@view expects a class".into()),
         }

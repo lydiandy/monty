@@ -7,7 +7,7 @@ use crate::{
     exception_private::{ExcType, ExcTypeExt, RunResult},
     heap::{BorrowedHeapReadMut, DropGuard, HeapId, HeapItem, HeapRead, heap_read_ref_as_field_mut},
     intern::StringId,
-    types::Dict,
+    types::{Dict, allocate_string},
     value::{EitherStr, Value},
 };
 
@@ -39,6 +39,18 @@ impl Module {
         }
     }
 
+    /// Module whose name lives in the intern pool (`Interns::get_string_id_by_name`).
+    ///
+    /// Host modules (`ui`, `db`, …) intern those names in [`Interns::new`] rather
+    /// than as `StaticStrings` variants.
+    pub fn named(vm: &VM<'_>, name: &str) -> Self {
+        let id = vm
+            .interns
+            .get_string_id_by_name(name)
+            .expect("host module names are interned in Interns::new");
+        Self::new(id)
+    }
+
     /// Returns the module's name StringId.
     pub fn name(&self) -> StringId {
         self.name
@@ -59,6 +71,19 @@ impl Module {
     pub fn set_attr(&mut self, name: impl Into<StringId>, value: Value, vm: &mut VM<'_>) {
         let key = Value::InternString(name.into());
         // Unwrap is safe because InternString keys are always hashable
+        self.attrs.set(key, value, vm).unwrap();
+    }
+
+    /// Sets an attribute by Python name.
+    ///
+    /// Uses an interned key when the name is already in the pool (static strings
+    /// or `Interns::new` host names); otherwise a heap `str`. `getattr` looks up
+    /// by content either way.
+    pub fn set_attr_str(&mut self, name: &str, value: Value, vm: &mut VM<'_>) {
+        let key = match vm.interns.get_string_id_by_name(name) {
+            Some(id) => Value::InternString(id),
+            None => allocate_string(name, vm.heap),
+        };
         self.attrs.set(key, value, vm).unwrap();
     }
 
