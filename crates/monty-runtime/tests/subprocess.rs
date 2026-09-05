@@ -116,6 +116,7 @@ impl ChildProc {
             code: code.to_owned(),
             inputs,
             skip_type_check: false,
+            host_modules: vec![],
         }));
         self.recv_turn()
     }
@@ -147,6 +148,7 @@ impl ChildProc {
             code: code.to_owned(),
             inputs: vec![],
             skip_type_check: false,
+            host_modules: vec![],
         }));
         self.expect_death();
     }
@@ -1424,6 +1426,7 @@ fn killed_child_is_detected_as_eof() {
         code: "while True:\n    pass".to_owned(),
         inputs: vec![],
         skip_type_check: false,
+        host_modules: vec![],
     }));
     thread::sleep(Duration::from_millis(200));
     child.child.kill().expect("kill");

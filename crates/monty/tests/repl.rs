@@ -1884,3 +1884,25 @@ fn call_builtin_via_session() {
         .unwrap();
     assert_eq!(result, MontyObject::Int(2));
 }
+
+#[test]
+fn feed_start_with_host_modules_true_import() {
+    use monty::HostModuleSource;
+    let repl = MontyRepl::new("repl.py", ResourceTracker::default(), CompileOptions::default());
+    let progress = repl
+        .feed_start_with_host_modules(
+            "from hello import greet\ngreet()",
+            vec![],
+            PrintWriter::Stdout,
+            vec![HostModuleSource {
+                name: "hello".into(),
+                filename: "hello.py".into(),
+                source: "def greet():\n    return 42\n".into(),
+            }],
+        )
+        .expect("feed_start_with_host_modules");
+    match progress {
+        ReplProgress::Complete { value, .. } => assert_eq!(value, MontyObject::Int(42)),
+        other => panic!("expected Complete(42), got {other:?}"),
+    }
+}

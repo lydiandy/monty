@@ -22,6 +22,7 @@ use crate::{
     intern::{InternerBuilder, Interns},
     name_map::NameMap,
     object_bridge::MontyObjectExt,
+    host_modules::HostModuleSource,
     run::{CompileOptions, Executor},
     run_progress::{
         ConvertedExit, ExtFunctionResult, ExtFunctionResultExt, LookupAnswer, LookupScope, NameLookupResult,
@@ -153,6 +154,19 @@ impl MontyRepl {
         inputs: Vec<(String, MontyObject)>,
         print: PrintWriter<'_>,
     ) -> Result<ReplProgress, Box<ReplStartError>> {
+        self.feed_start_with_host_modules(code, inputs, print, Vec::new())
+    }
+
+    /// Like [`Self::feed_start`], but compiles `host_modules` with the snippet so
+    /// `from widgets import …` / `import hello` resolve via `LoadHostModule`
+    /// without a host filesystem mount (browser / wasm path).
+    pub fn feed_start_with_host_modules(
+        self,
+        code: &str,
+        inputs: Vec<(String, MontyObject)>,
+        print: PrintWriter<'_>,
+        host_modules: Vec<HostModuleSource>,
+    ) -> Result<ReplProgress, Box<ReplStartError>> {
         let mut this = self;
         if code.is_empty() {
             return Ok(ReplProgress::Complete {
@@ -166,6 +180,9 @@ impl MontyRepl {
         let input_script_name = this.next_input_script_name();
         // Preserve this snippet's source (see `feed_run` for rationale).
         this.sources.insert(input_script_name.clone(), code.to_owned());
+        for module in &host_modules {
+            this.sources.insert(module.filename.clone(), module.source.clone());
+        }
         let executor = match Executor::new_repl_snippet(
             code.to_owned(),
             &input_script_name,
@@ -173,6 +190,7 @@ impl MontyRepl {
             &this.interns,
             &input_names,
             this.options,
+            host_modules,
         ) {
             Ok(exec) => exec,
             Err(error) => return Err(Box::new(ReplStartError { repl: this, error })),
@@ -189,6 +207,7 @@ impl MontyRepl {
                 print.reborrow(),
                 executor.assert_repr_max_bytes,
             );
+            vm.set_host_modules(&executor.host_modules);
 
             // Inject inputs with VM alive
             if let Err(error) = inject_inputs_into_vm(executor, input_values, &mut vm) {
@@ -248,6 +267,7 @@ impl MontyRepl {
             &self.interns,
             &input_names,
             self.options,
+            Vec::new(),
         )?;
 
         self.ensure_globals_size(executor.namespace_size());
@@ -261,6 +281,7 @@ impl MontyRepl {
                 print.reborrow(),
                 executor.assert_repr_max_bytes,
             );
+            vm.set_host_modules(&executor.host_modules);
 
             if let Err(e) = inject_inputs_into_vm(executor, input_values, &mut vm) {
                 self.globals = vm.take_globals();
@@ -728,6 +749,8 @@ impl ReplNameLookup {
                     print.reborrow(),
                     executor.assert_repr_max_bytes,
                 );
+                vm.set_host_modules(&executor.host_modules);
+
 
                 // Resolve the name lookup result with the VM alive
                 let answer = LookupAnswer::new(result, &mut vm);
@@ -822,6 +845,7 @@ impl ReplResolveFutures {
                 print.reborrow(),
                 executor.assert_repr_max_bytes,
             );
+            vm.set_host_modules(&executor.host_modules);
 
             if let Some(call_id) = invalid_call_id {
                 repl.globals = vm.take_globals();
@@ -985,6 +1009,7 @@ impl ReplSnapshot {
                     print.reborrow(),
                     executor.assert_repr_max_bytes,
                 );
+                vm.set_host_modules(&executor.host_modules);
 
                 let vm_result = match ext_result {
                     ExtFunctionResult::Return(obj) => vm.resume(obj),

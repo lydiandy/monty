@@ -1,17 +1,18 @@
 /// <reference lib="dom" />
-// Fetches and compiles the core modules generated from the Monty component.
+// 拉取并编译 Monty component 的各 core 模块。
 
 import { COMPONENT_MODULE_NAMES } from './componentModules.js'
 import type { ComponentModules } from './host.js'
 
-/** Loads every core module needed to instantiate the bundled component. */
+/** 加载实例化所需的全部 core 模块。 */
 export async function loadModule(): Promise<ComponentModules> {
-  // Keep each URL literal so Vite and webpack emit all component assets.
+  // URL 字面量保持内联，便于 Vite/webpack 把 component 资产打进包。
   const modules = await Promise.all([
     WebAssembly.compileStreaming(fetch(new URL('./component/monty.component.core.wasm', import.meta.url))),
     WebAssembly.compileStreaming(fetch(new URL('./component/monty.component.core2.wasm', import.meta.url))),
     WebAssembly.compileStreaming(fetch(new URL('./component/monty.component.core3.wasm', import.meta.url))),
     WebAssembly.compileStreaming(fetch(new URL('./component/monty.component.core4.wasm', import.meta.url))),
+    WebAssembly.compileStreaming(fetch(new URL('./component/monty.component.core5.wasm', import.meta.url))),
   ])
   return Object.fromEntries(COMPONENT_MODULE_NAMES.map((name, index) => [name, modules[index]]))
 }

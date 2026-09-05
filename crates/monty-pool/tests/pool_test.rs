@@ -1260,6 +1260,7 @@ async fn a_subprocess_shutdown_dump_is_refused_on_the_raw_path() {
             code: "1 + 1".to_owned(),
             inputs: vec![],
             skip_type_check: false,
+            host_modules: vec![],
         })),
         ..pb::ParentRequest::default()
     };
@@ -1301,6 +1302,7 @@ async fn an_event_with_no_kind_is_refused_on_the_raw_path() {
             code: "1 + 1".to_owned(),
             inputs: vec![],
             skip_type_check: false,
+            host_modules: vec![],
         })),
         ..pb::ParentRequest::default()
     };
@@ -1346,6 +1348,7 @@ async fn a_fatal_error_on_the_raw_path_discards_the_worker() {
             code: "1 + 1".to_owned(),
             inputs: vec![],
             skip_type_check: false,
+            host_modules: vec![],
         })),
         ..pb::ParentRequest::default()
     };

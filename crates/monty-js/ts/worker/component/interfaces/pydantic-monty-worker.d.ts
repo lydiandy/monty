@@ -288,10 +288,16 @@ export interface ConfigureRequest {
   typeCheckFormat: TypeCheckFormat
   typeCheckColor: boolean
 }
+export interface HostModuleSource {
+  name: string
+  filename: string
+  source: string
+}
 export interface FeedRequest {
   code: string
   inputs: Array<NamedValue>
   skipTypeCheck: boolean
+  hostModules: Array<HostModuleSource>
 }
 export interface RaisedError {
   excType: string

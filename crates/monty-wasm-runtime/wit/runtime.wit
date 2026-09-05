@@ -208,11 +208,24 @@ interface worker {
         type-check-color: bool,
     }
 
+    /// One host-registered top-level Python module (`widgets.py` → `widgets`).
+    record host-module-source {
+        /// Import name (`widgets` in `from widgets import button`).
+        name: string,
+        /// Path used in tracebacks.
+        filename: string,
+        /// Module source.
+        source: string,
+    }
+
     /// One Python snippet and its host inputs.
     record feed-request {
         code: string,
         inputs: list<named-value>,
         skip-type-check: bool,
+        /// Host app-dir modules for this feed (`LoadHostModule`). Browser uses
+        /// this instead of MountDir (no host filesystem).
+        host-modules: list<host-module-source>,
     }
 
     /// A host-raised exception used to resume a call.

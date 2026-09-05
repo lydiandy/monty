@@ -740,6 +740,7 @@ fn decodes_in_frame(value: &MontyObject) -> bool {
                 value: Some(WireObject::new(value.clone())),
             }],
             skip_type_check: false,
+            host_modules: vec![],
         })),
         trace_parent: None,
     };

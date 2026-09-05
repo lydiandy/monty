@@ -432,6 +432,7 @@ impl Checkout {
                 })
                 .collect(),
             skip_type_check,
+            host_modules: vec![],
         }));
         self.expect_turn(&request, on_print).await
     }

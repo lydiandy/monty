@@ -331,6 +331,7 @@ async fn duration_backstop_arms_on_the_raw_path() {
             code: "while True:\n    pass".to_owned(),
             inputs: vec![],
             skip_type_check: false,
+            host_modules: vec![],
         })),
         ..pb::ParentRequest::default()
     };
@@ -392,6 +393,7 @@ async fn a_raw_load_adopts_the_dumps_duration_budget() {
             code: "while True:\n    pass".to_owned(),
             inputs: vec![],
             skip_type_check: false,
+            host_modules: vec![],
         })),
         ..pb::ParentRequest::default()
     };
@@ -451,6 +453,7 @@ async fn lifecycle_requests_are_refused_on_the_raw_path() {
             code: "1 + 1".to_owned(),
             inputs: vec![],
             skip_type_check: false,
+            host_modules: vec![],
         })),
         ..pb::ParentRequest::default()
     };
@@ -505,6 +508,7 @@ async fn an_oversize_raw_load_keeps_the_duration_budget() {
             code: "while True:\n    pass".to_owned(),
             inputs: vec![],
             skip_type_check: false,
+            host_modules: vec![],
         })),
         ..pb::ParentRequest::default()
     };
@@ -547,6 +551,7 @@ async fn a_shutdown_dump_on_the_raw_path_discards_the_worker() {
             code: "1 + 1".to_owned(),
             inputs: vec![],
             skip_type_check: false,
+            host_modules: vec![],
         })),
         ..pb::ParentRequest::default()
     };

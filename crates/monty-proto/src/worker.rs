@@ -18,7 +18,7 @@
 
 use std::{borrow::Cow, mem};
 
-use monty::{Dump, MontyRepl, ReplProgress, ReplStartError, Session, SessionRef, dump};
+use monty::{Dump, HostModuleSource, MontyRepl, ReplProgress, ReplStartError, Session, SessionRef, dump};
 use monty_type_checking::{SourceFile, TypeChecker};
 use monty_types::{
     AssertMessageAnnotations, CompileOptions, ExcType, ExtFunctionResult, MontyException, MontyObject, OsFunctionCall,
@@ -505,8 +505,22 @@ impl Child {
         {
             state.pending_snippet = Some(feed.code.clone());
         }
+        let host_modules = feed
+            .host_modules
+            .into_iter()
+            .map(|m| HostModuleSource {
+                name: m.name,
+                filename: m.filename,
+                source: m.source,
+            })
+            .collect();
         let mut print = ProtoPrint::new(sink);
-        let result = repl.feed_start(&feed.code, inputs, PrintWriter::Callback(&mut print));
+        let result = repl.feed_start_with_host_modules(
+            &feed.code,
+            inputs,
+            PrintWriter::Callback(&mut print),
+            host_modules,
+        );
         let event = self.drive(result, &mut print);
         print.drain();
         event

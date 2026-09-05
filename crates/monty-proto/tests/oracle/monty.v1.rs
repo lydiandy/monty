@@ -585,6 +585,21 @@ pub struct Configure {
     #[prost(uint32, tag = "9")]
     pub protocol_version: u32,
 }
+/// One host-registered top-level Python module (`widgets.py` → import name
+/// `widgets`). Compiled with the feed snippet so `from widgets import …` works
+/// without a host filesystem mount (browser / wasm).
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct HostModuleSource {
+    /// Import name (`widgets` in `from widgets import button`).
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    /// Path used in tracebacks.
+    #[prost(string, tag = "2")]
+    pub filename: ::prost::alloc::string::String,
+    /// Module source.
+    #[prost(string, tag = "3")]
+    pub source: ::prost::alloc::string::String,
+}
 /// Executes one snippet against the session. Turn ends with `Complete`,
 /// `Error`, `TypingError`, or a suspension event.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -596,6 +611,10 @@ pub struct Feed {
     /// Skip type checking for this feed even when the session enables it.
     #[prost(bool, tag = "3")]
     pub skip_type_check: bool,
+    /// Optional host app-dir modules for this feed (LoadHostModule). Empty on
+    /// stock feeds; browser uses this instead of MountDir.
+    #[prost(message, repeated, tag = "4")]
+    pub host_modules: ::prost::alloc::vec::Vec<HostModuleSource>,
 }
 /// Answers a `FunctionCall` or `OsCall` suspension. `call_id` must match the
 /// suspension event.

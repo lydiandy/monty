@@ -60,6 +60,16 @@ export type PrintCallback = (stream: 'stdout' | 'stderr', text: string) => void
  */
 export type PrintTargetInput = PrintCallback | CollectString | CollectStreams
 
+/** One host-registered top-level Python module for `feedRun` / `feedStart`. */
+export interface HostModuleSource {
+  /** Import name (`hello` in `import hello` / `from hello import …`). */
+  name: string
+  /** Path used in tracebacks. */
+  filename: string
+  /** Module source. */
+  source: string
+}
+
 /** Options for [`MontySession.feedRun`]. */
 export interface FeedOptions {
   /** Values bound as globals before the snippet runs. */
@@ -82,6 +92,12 @@ export interface FeedOptions {
   os?: OsCallback
   /** Skip type checking for this feed even when the session enables it. */
   skipTypeCheck?: boolean
+  /**
+   * Host-supplied Python modules compiled with this feed (`LoadHostModule`).
+   * Required for true `import` / `from … import` in the browser wasm worker
+   * (no MountDir). Not a substitute for native `ui`/`motion` HostVtable.
+   */
+  hostModules?: HostModuleSource[]
 }
 
 /**
@@ -109,6 +125,8 @@ export interface FeedStartOptions {
   os?: OsCallback
   /** Skip type checking for this feed even when the session enables it. */
   skipTypeCheck?: boolean
+  /** Host-supplied Python modules for this feed; see [`FeedOptions.hostModules`]. */
+  hostModules?: HostModuleSource[]
 }
 
 /** Options for [`MontySession.loadSnapshot`]. */
@@ -187,6 +205,7 @@ export class MontySession {
       mountsToNative(options.mount),
       options.skipTypeCheck ?? false,
       onPrint,
+      options.hostModules ?? null,
     )) as NativeTurn
     for (;;) {
       switch (turn.kind) {
@@ -256,6 +275,7 @@ export class MontySession {
       mountsToNative(options.mount),
       options.skipTypeCheck ?? false,
       driver.onPrint,
+      options.hostModules ?? null,
     )) as NativeTurn
     return driver.advance(turn)
   }

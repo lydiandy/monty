@@ -249,6 +249,15 @@ fn request_from_component(request: Request) -> Result<pb::ParentRequest, String>
                 })
                 .collect::<Result<_, String>>()?,
             skip_type_check: request.skip_type_check,
+            host_modules: request
+                .host_modules
+                .into_iter()
+                .map(|m| pb::HostModuleSource {
+                    name: m.name,
+                    filename: m.filename,
+                    source: m.source,
+                })
+                .collect(),
         }),
         Request::ResumeCall(request) => pb::parent_request::Kind::ResumeCall(pb::ResumeCall {
             call_id: request.call_id,

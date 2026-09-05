@@ -479,6 +479,18 @@ enum TypeCheckFormat {
   TYPE_CHECK_FORMAT_GITHUB = 9;
 }
 
+// One host-registered top-level Python module (`widgets.py` → import name
+// `widgets`). Compiled with the feed snippet so `from widgets import …` works
+// without a host filesystem mount (browser / wasm).
+message HostModuleSource {
+  // Import name (`widgets` in `from widgets import button`).
+  string name = 1;
+  // Path used in tracebacks.
+  string filename = 2;
+  // Module source.
+  string source = 3;
+}
+
 // Executes one snippet against the session. Turn ends with `Complete`,
 // `Error`, `TypingError`, or a suspension event.
 message Feed {
@@ -486,6 +498,9 @@ message Feed {
   repeated NamedValue inputs = 2;
   // Skip type checking for this feed even when the session enables it.
   bool skip_type_check = 3;
+  // Optional host app-dir modules for this feed (LoadHostModule). Empty on
+  // stock feeds; browser uses this instead of MountDir.
+  repeated HostModuleSource host_modules = 4;
 }
 
 // Answers a `FunctionCall` or `OsCall` suspension. `call_id` must match the

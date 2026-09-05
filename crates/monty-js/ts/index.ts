@@ -23,6 +23,7 @@ export {
   NOT_HANDLED,
   type ExternalFunction,
   type FeedOptions,
+  type HostModuleSource,
   type FeedStartOptions,
   type FutureResolution,
   type LoadSnapshotOptions,

@@ -349,6 +349,7 @@ impl Executor {
         existing_interns: &Interns,
         input_names: &[String],
         options: CompileOptions,
+        extra: Vec<HostModuleSource>,
     ) -> Result<Self, MontyException> {
         check_identifier(input_names)?;
 
@@ -370,18 +371,68 @@ impl Executor {
             input_slots.push(slot);
         }
 
-        let parse_result = parse_with_interner(&code, script_name, seeded_interner)
+        // Parse the entry snippet, then host modules, sharing one intern pool
+        // (same shape as `new_with_host_modules`, but seeded from the REPL).
+        let parsed_entry = parse_with_interner(&code, script_name, seeded_interner)
             .map_err(|e| e.into_python_exc(script_name, &code))?;
-        let prepared = prepare_with_existing_names(parse_result, existing_globals)
-            .map_err(|e| e.into_python_exc(script_name, &code))?;
+        let mut interner = parsed_entry.interner;
+        let entry_nodes = parsed_entry.nodes;
 
-        let existing_functions = existing_interns.functions_clone();
+        let mut extra_asts = Vec::new();
+        for module in extra {
+            interner.intern(&module.name);
+            let parsed = parse_with_interner(&module.source, &module.filename, interner)
+                .map_err(|e| e.into_python_exc(&module.filename, &module.source))?;
+            extra_asts.push((module, parsed.nodes));
+            interner = parsed.interner;
+        }
+
+        let mut extra_prepared = Vec::new();
+        for (module, nodes) in extra_asts {
+            let filename = module.filename.clone();
+            let source = module.source.clone();
+            let prepared =
+                prepare_with_existing_names(crate::parse::ParseResult { nodes, interner }, NameMap::default())
+                    .map_err(|e| e.into_python_exc(&filename, &source))?;
+            interner = prepared.interner;
+            extra_prepared.push((module, prepared.globals, prepared.nodes));
+        }
+
+        let prepared = prepare_with_existing_names(
+            crate::parse::ParseResult {
+                nodes: entry_nodes,
+                interner,
+            },
+            existing_globals,
+        )
+        .map_err(|e| e.into_python_exc(script_name, &code))?;
+
+        let mut functions = existing_interns.functions_clone();
         let mut interns = Interns::new(prepared.interner, Vec::new());
+        let mut host_specs = std::collections::HashMap::new();
+        for (module, globals, nodes) in extra_prepared {
+            let start = u32::try_from(functions.len()).unwrap_or(u32::MAX);
+            let compile_result =
+                Compiler::compile_module_with_functions(&nodes, &interns, &globals, functions, options)
+                    .map_err(|e| e.into_python_exc(&module.filename, &module.source))?;
+            functions = compile_result.functions;
+            let end = u32::try_from(functions.len()).unwrap_or(u32::MAX);
+            host_specs.insert(
+                module.name,
+                HostModuleSpec {
+                    code: Arc::new(compile_result.code),
+                    names: globals,
+                    func_start: start,
+                    func_end: end,
+                },
+            );
+        }
+
         let compile_result = Compiler::compile_module_with_functions(
             &prepared.nodes,
             &interns,
             &prepared.globals,
-            existing_functions,
+            functions,
             options,
         )
         .map_err(|e| e.into_python_exc(script_name, &code))?;
@@ -395,7 +446,7 @@ impl Executor {
             input_slots,
             assert_repr_max_bytes: options.assert_message_annotations.max_bytes(),
             heap_capacity: AtomicUsize::new(0),
-            host_modules: HostModuleRegistry::default(),
+            host_modules: HostModuleRegistry::new(host_specs),
         })
     }
 
