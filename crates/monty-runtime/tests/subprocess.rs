@@ -5,13 +5,15 @@
 
 use std::{
     io::{Read, Write},
+    iter::repeat_n,
     process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio},
     thread,
     time::{Duration, Instant},
 };
 
 use monty_proto::{
-    FrameError, FrameReader, MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION, WireObject, pb, write_frame,
+    FrameError, FrameReader, MAX_FRAME_LEN, MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION, WireFunctionCall,
+    WireObject, exceeds_max_frame_len, pb, write_frame,
 };
 use monty_types::MontyObject;
 
@@ -326,6 +328,98 @@ fn external_function_round_trip() {
     child.shutdown();
 }
 
+/// `AbortFeed` raises the supplied error uncatchably and keeps the session usable.
+#[test]
+fn abort_feed_round_trip() {
+    let mut child = ChildProc::spawn();
+    child.create_repl();
+    let (_, event) =
+        child.feed("while True:\n    try:\n        open('/etc/passwd')\n    except Exception:\n        pass");
+    let pb::child_event::Kind::OsCall(_) = event else {
+        panic!("expected OsCall, got {event:?}");
+    };
+    child.send(pb::parent_request::Kind::AbortFeed(pb::AbortFeed {
+        exception: Some(pb::RaisedException {
+            exc_type: "RuntimeError".to_owned(),
+            message: Some("suspension limit 3 exceeded".to_owned()),
+            traceback: vec![],
+            data: None,
+        }),
+    }));
+    let (_, event) = child.recv_turn();
+    let error = expect_error(event);
+    assert_eq!(error.exc_type, "RuntimeError");
+    assert_eq!(error.message.as_deref(), Some("suspension limit 3 exceeded"));
+    assert_eq!(
+        error
+            .traceback
+            .first()
+            .and_then(|frame| frame.start.map(|loc| loc.line)),
+        Some(3)
+    );
+    assert_eq!(child.feed_complete("1 + 1"), MontyObject::Int(2));
+    child.shutdown();
+}
+
+/// A suspension announcement is size-checked *with* its session stamps: one
+/// that fits `MAX_FRAME_LEN` only before the stamps are added must be refused
+/// as the clean oversized-argument error, not fail at send time and kill the
+/// worker (the parent would never learn the resume point).
+///
+/// Allocates ~256 MiB several times over (sizing here, the sandbox string, its
+/// wire copy), so it is memory-heavy; disable it if it proves flaky in CI.
+#[test]
+fn near_limit_suspension_is_refused_cleanly() {
+    let announcement = |arg_len: usize| pb::ChildEvent {
+        kind: Some(pb::child_event::Kind::FunctionCall(WireFunctionCall {
+            function_name: "f".to_owned(),
+            args: vec![MontyObject::String("x".repeat(arg_len))],
+            kwargs: vec![],
+            call_id: 1,
+            object_id: None,
+        })),
+        ..Default::default()
+    };
+    // Size the argument so the unstamped announcement is exactly
+    // `MAX_FRAME_LEN`: shrink an oversize probe by its excess, then walk up
+    // past the length varints that lose a byte as the sizes they describe
+    // drop below 2^28 (= `MAX_FRAME_LEN`).
+    let probe = MAX_FRAME_LEN as usize + 16;
+    let probe_len = exceeds_max_frame_len(&announcement(probe)).expect("probe exceeds the limit") as usize;
+    let mut arg_len = probe - (probe_len - MAX_FRAME_LEN as usize);
+    while exceeds_max_frame_len(&announcement(arg_len + 1)).is_none() {
+        arg_len += 1;
+    }
+    assert!(exceeds_max_frame_len(&announcement(arg_len)).is_none());
+
+    let mut child = ChildProc::spawn();
+    // a configured limit is stamped on every reply, so the sent frame is
+    // always larger than the unstamped announcement
+    child.create_repl_with(pb::Configure {
+        script_name: "main.py".to_owned(),
+        limits: Some(pb::ResourceLimits {
+            max_suspensions: Some(5),
+            ..Default::default()
+        }),
+        monty_version: env!("CARGO_PKG_VERSION").to_owned(),
+        protocol_version: PROTOCOL_VERSION,
+        ..Default::default()
+    });
+    let (_, event) = child.feed(&format!("f('x' * {arg_len})"));
+    let error = expect_error(event);
+    assert_eq!(error.exc_type, "RuntimeError");
+    assert!(
+        error
+            .message
+            .as_deref()
+            .is_some_and(|m| m.starts_with("argument frame of ") && m.contains("exceeds the maximum of")),
+        "unexpected message: {:?}",
+        error.message
+    );
+    assert_eq!(child.feed_complete("1 + 1"), MontyObject::Int(2));
+    child.shutdown();
+}
+
 #[test]
 fn name_lookup_round_trip() {
     let mut child = ChildProc::spawn();
@@ -591,6 +685,81 @@ fn async_accumulation_reaches_the_soft_limit() {
     child.shutdown();
 }
 
+/// A value that already meets its width emits no fill, so a multibyte fill
+/// must not be charged as though it were repeated to the full width.
+#[test]
+fn formatting_without_padding_does_not_charge_fill() {
+    let mut child = ChildProc::spawn();
+    child.create_repl_with(configure_with_max_memory(1024 * 1024));
+    let code = "s = 'x' * 400_000\nlen(f'{s:é<400000}')";
+    assert_eq!(child.feed_complete(code), MontyObject::Int(400_000));
+    child.shutdown();
+}
+
+/// Generic string fallback must use the same exact output bound as direct strings.
+#[test]
+fn formatting_generic_value_without_padding_does_not_charge_fill() {
+    let mut child = ChildProc::spawn();
+    child.create_repl_with(configure_with_max_memory(1024 * 1024));
+    let code = "s = 'x' * 400_000\nclass Value:\n    def __str__(self):\n        return s\nvalue = Value()\nlen(f'{value:é<400000}')";
+    assert_eq!(child.feed_complete(code), MontyObject::Int(400_000));
+    assert_eq!(child.feed_complete("1 + 1"), MontyObject::Int(2));
+    child.shutdown();
+}
+
+#[test]
+fn impossible_format_capacity_preserves_the_worker() {
+    let width = isize::MAX.unsigned_abs() / 'é'.len_utf8() + 2;
+    let mut child = ChildProc::spawn();
+    child.create_repl();
+    for code in [
+        format!("'{{0:é<{width}}}'.format('x')"),
+        format!("'{{0:é<{width}}}'.format(1)"),
+    ] {
+        let (_, event) = child.feed(&code);
+        assert_eq!(expect_error(event).exc_type, "MemoryError", "{code}");
+    }
+    assert_eq!(child.feed_complete("1 + 1"), MontyObject::Int(2));
+    child.shutdown();
+}
+
+#[test]
+fn large_unnested_format_spec_preserves_the_worker() {
+    const SPEC_LEN: usize = 5_500_000;
+    let mut template = String::with_capacity(SPEC_LEN + 4);
+    template.push_str("{0:");
+    template.extend(repeat_n('x', SPEC_LEN));
+    template.push('}');
+
+    for junk_len in [5_000_000, 10_000_000] {
+        let mut child = ChildProc::spawn();
+        child.create_repl_with(configure_with_max_memory(16 * 1024 * 1024));
+        let inputs = vec![pb::NamedValue {
+            name: "template".to_owned(),
+            value: Some(str_value(&template)),
+        }];
+        // The smaller filler reaches tracked error rendering without room for
+        // another spec copy. The larger one requires a preflighted receiver copy.
+        let code = format!("junk = 'j' * {junk_len}\ntemplate.format(0)");
+        let (_, event) = child.feed_with(&code, inputs);
+        assert_eq!(expect_error(event).exc_type, "MemoryError", "junk_len {junk_len}");
+        assert_eq!(child.feed_complete("1 + 1"), MontyObject::Int(2));
+        child.shutdown();
+    }
+}
+
+#[test]
+fn numeric_formatting_peak_memory_preserves_the_worker() {
+    for code in ["'{:08000000d}'.format(1)", "'{:.8000000f}'.format(1.0)"] {
+        let mut child = ChildProc::spawn();
+        child.create_repl_with(configure_with_max_memory(10_000_000));
+        let (_, event) = child.feed(code);
+        assert_eq!(expect_error(event).exc_type, "MemoryError", "{code}");
+        assert_eq!(child.feed_complete("1 + 1"), MontyObject::Int(2), "{code}");
+        child.shutdown();
+    }
+}
+
 /// Gathers nested as *items* of one another (`g = asyncio.gather(g)`) cost no
 /// Python frames, so nothing but `max_memory` bounds how deep a nest gets built.
 /// Building one too large for the limit must end the run with a `MemoryError`,
@@ -644,11 +813,27 @@ fn committing_a_deep_gather_nest_reaches_the_soft_limit() {
 /// jump from below the soft limit past the hard ceiling. The reported figure is
 /// what each result really costs, so it pins down that the refusal accounted for
 /// the whole allocation rather than tripping on some smaller intermediate.
+///
+/// Every case here refuses at a one-shot preflight, whose size is deterministic.
+/// A refusal that instead depends on where a fill loop's poll lands has no
+/// stable figure to pin — test that as a property, as the `batched` case below
+/// does.
 #[test]
 fn large_allocations_are_rejected_before_the_hard_limit() {
     // each case with the allocator usage it should be refused at
     let cases = [
         ("'x' * 10_000_000", 10_031_137),
+        // Each formatter builder must fail softly before the worker reaches its hard ceiling.
+        ("s = 'x' * 400_000\n'{0}{0}'.format(s)", 1_231_000),
+        ("s = 'x' * 400_000\n'{0:>1000000}'.format(s)", 1_431_791),
+        ("s = 'é' * 200_000\n'{0!a}'.format(s)", 1_230_835),
+        // `%` formatting: padding, float digits, integer zero-extension and output growth.
+        ("'%*d' % (2_000_000, 1)", 2_031_460),
+        ("'%.*f' % (1_000_000, 1.0)", 1_160_498),
+        ("'%.*d' % (2_000_000, 1)", 2_031_466),
+        ("s = 'x' * 400_000\n'%s%s' % (s, s)", 1_631_924),
+        ("b'%*d' % (2_000_000, 1)", 2_031_588),
+        ("s = b'x' * 400_000\nb'%s%s' % (s, s)", 1_632_055),
         ("b'x' * 10_000_000", 10_031_269),
         ("[None] * 1_000_000", 16_031_391),
         ("2 ** 10_000_000", 10_031_230),
@@ -680,6 +865,11 @@ fn large_allocations_are_rejected_before_the_hard_limit() {
             "from collections import deque\nd = deque()\nd.extend(range(1_000_000))",
             16_031_971,
         ),
+        // `itertools.batched` preflights one batch, capped at `n`.
+        (
+            "import itertools\nnext(itertools.batched(range(1_000_000), 1_000_000))",
+            16_032_590,
+        ),
     ];
 
     for (code, expected) in cases {
@@ -693,6 +883,19 @@ fn large_allocations_are_rejected_before_the_hard_limit() {
         assert_eq!(child.feed_complete("1 + 1"), MontyObject::Int(2), "{code}");
         child.shutdown();
     }
+}
+
+/// `inf` and `nan` print as they are, so a huge float precision costs nothing
+/// and must not be charged against the limit.
+#[test]
+fn non_finite_float_precision_is_not_charged() {
+    let mut child = ChildProc::spawn();
+    child.create_repl_with(configure_with_max_memory(64 * 1024));
+    assert_eq!(
+        child.feed_complete("'%.2000000000f' % float('inf')"),
+        MontyObject::String("inf".to_owned())
+    );
+    child.shutdown();
 }
 
 /// Announcing a suspension must not cost extra copies of the value being
@@ -798,6 +1001,45 @@ fn reading_partial_args_cannot_kill_the_worker() {
     child.shutdown();
 }
 
+/// A hint-less source gets no preflight, so only the fill loop's own memory
+/// poll can stop `batched` short of the hard limit. Where that poll lands
+/// depends on how far the batch's `Vec` has doubled, so this pins the property
+/// — refused above the soft limit, well short of the hard ceiling — rather than
+/// a byte figure a single reallocation would move by ~1 MiB.
+#[test]
+fn batched_without_a_size_hint_is_refused_before_the_hard_limit() {
+    const SOFT_LIMIT: u64 = 1024 * 1024;
+    // `monty-alloc`'s headroom above the soft limit, without type checking
+    const HARD_CEILING: u64 = SOFT_LIMIT + 4 * 1024 * 1024;
+
+    let mut child = ChildProc::spawn();
+    child.create_repl_with(configure_with_max_memory(SOFT_LIMIT));
+    let code = "import itertools\nnext(itertools.batched(itertools.count(), 1_000_000_000))";
+    let (_, event) = child.feed(code);
+    let error = expect_error(event);
+    assert_eq!(error.exc_type, "MemoryError");
+    let message = error.message.expect("MemoryError should have a message");
+    let used = reported_usage(&message, code);
+    assert!(
+        (SOFT_LIMIT..HARD_CEILING).contains(&used),
+        "{code}: reported {used} bytes, expected a refusal between {SOFT_LIMIT} and {HARD_CEILING}"
+    );
+    assert_eq!(child.feed_complete("1 + 1"), MontyObject::Int(2));
+    child.shutdown();
+}
+
+/// A small `n` caps a batch however long the source, so batching a huge
+/// exact-hint iterable must not trip the `batched` preflight — the memory
+/// really is bounded by `n`, not by the source.
+#[test]
+fn small_batched_n_is_not_preflighted() {
+    let mut child = ChildProc::spawn();
+    child.create_repl_with(configure_with_max_memory(1024 * 1024));
+    let code = "import itertools\nlen(next(itertools.batched(range(500_000), 8)))";
+    assert_eq!(child.feed_complete(code), MontyObject::Int(8));
+    child.shutdown();
+}
+
 /// A bounded deque retains at most `maxlen` items, so extending it from a huge
 /// exact-hint iterator (the sliding-window pattern) must not trip the
 /// `deque.extend` preflight — the memory really is capped at `maxlen`.
@@ -820,16 +1062,22 @@ fn bounded_deque_extend_is_not_preflighted() {
 fn assert_reported_usage(message: &str, expected: u64, code: &str) {
     const TOLERANCE: u64 = 1024;
 
-    let used: u64 = message
-        .strip_prefix("memory limit exceeded: ")
-        .and_then(|rest| rest.strip_suffix(" bytes > 1048576 bytes"))
-        .unwrap_or_else(|| panic!("{code}: unexpected message {message:?}"))
-        .parse()
-        .unwrap_or_else(|_| panic!("{code}: unexpected message {message:?}"));
+    let used = reported_usage(message, code);
     assert!(
         used.abs_diff(expected) <= TOLERANCE,
         "{code}: reported {used} bytes, expected within {TOLERANCE} of {expected}"
     );
+}
+
+/// Parse the bytes-used figure out of a `memory limit exceeded` message raised
+/// against a 1 MiB limit, panicking with `code` if the message is not one.
+fn reported_usage(message: &str, code: &str) -> u64 {
+    message
+        .strip_prefix("memory limit exceeded: ")
+        .and_then(|rest| rest.strip_suffix(" bytes > 1048576 bytes"))
+        .unwrap_or_else(|| panic!("{code}: unexpected message {message:?}"))
+        .parse()
+        .unwrap_or_else(|_| panic!("{code}: unexpected message {message:?}"))
 }
 
 /// A refused allocation must leave the parent something it can classify: the
@@ -1355,13 +1603,18 @@ fn unsupported_protocol_version_on_create_is_a_fatal_error() {
     // Spelled out rather than taken from `check_protocol_version`, so rewording
     // the refusal a parent actually reads fails here.
     let supported = if MIN_SUPPORTED_PROTOCOL_VERSION == PROTOCOL_VERSION {
-        format!("this build supports protocol version {PROTOCOL_VERSION}")
+        format!("server supports protocol version {PROTOCOL_VERSION}")
     } else {
-        format!("this build supports protocol versions {MIN_SUPPORTED_PROTOCOL_VERSION} to {PROTOCOL_VERSION}")
+        format!("server supports protocol versions {MIN_SUPPORTED_PROTOCOL_VERSION} to {PROTOCOL_VERSION}")
     };
     assert!(
         message.contains(&supported),
         "message should name the supported range: {message}"
+    );
+    // Ahead of the range, so the client is on the wrong version rather than behind.
+    assert!(
+        message.contains("make sure you are using the correct client version"),
+        "message should point at the client version: {message}"
     );
 }
 
@@ -1378,6 +1631,11 @@ fn undeclared_protocol_version_is_a_fatal_error() {
     assert!(
         message.contains("unsupported protocol version 0"),
         "message should name the rejected version: {message}"
+    );
+    // Below the range, so the client needs to move forward.
+    assert!(
+        message.contains("try updating to a newer client version"),
+        "message should tell the client to update: {message}"
     );
 }
 

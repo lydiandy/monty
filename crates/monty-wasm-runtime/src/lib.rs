@@ -47,8 +47,9 @@ struct Component;
 impl Guest for Component {
     fn dispatch(request: Request) -> DispatchResult {
         let (result, allocator_ready) = CHILD.with_borrow_mut(|child| {
-            let result = dispatch(child, request);
+            let mut result = dispatch(child, request);
             let budget = child.session_budget();
+            result.max_suspensions = budget.max_suspensions.map(|limit| limit as u64);
             let allocator_ready = monty_alloc::set_limit(budget.max_memory, budget.type_check);
             (result, allocator_ready)
         });
@@ -56,6 +57,7 @@ impl Guest for Component {
             DispatchResult {
                 status: Status::Shutdown,
                 events: vec![Event::FatalError(error.to_owned())],
+                max_suspensions: result.max_suspensions,
             }
         } else {
             result
@@ -73,6 +75,7 @@ fn dispatch(child: &mut Child, request: Request) -> DispatchResult {
                 events: vec![event_from_proto(protocol_violation(&format!(
                     "malformed component request: {error}"
                 )))],
+                max_suspensions: None,
             };
         }
     };
@@ -82,6 +85,7 @@ fn dispatch(child: &mut Child, request: Request) -> DispatchResult {
             events: vec![event_from_proto(child.fatal_event(&format!(
                 "request frame of {len} bytes exceeds maximum of {MAX_FRAME_LEN} bytes"
             )))],
+            max_suspensions: None,
         };
     }
 
@@ -105,6 +109,7 @@ fn dispatch(child: &mut Child, request: Request) -> DispatchResult {
             Status::Shutdown
         },
         events: sink.events,
+        max_suspensions: None,
     }
 }
 
@@ -286,6 +291,9 @@ fn request_from_component(request: Request) -> Result<pb::ParentRequest, String>
                 })
                 .collect::<Result<_, String>>()?,
         }),
+        Request::AbortFeed(error) => pb::parent_request::Kind::AbortFeed(pb::AbortFeed {
+            exception: Some(raised_exception_from_component(error)),
+        }),
         Request::Dump => pb::parent_request::Kind::Dump(pb::Dump {}),
         Request::Load(state) => pb::parent_request::Kind::Load(pb::Load { state }),
         Request::Reset => pb::parent_request::Kind::Reset(pb::Reset {}),
@@ -305,6 +313,7 @@ fn configure_from_component(request: ConfigureRequest) -> pb::Configure {
             max_memory_bytes: limits.max_memory_bytes,
             gc_interval: limits.gc_interval,
             max_recursion_depth: limits.max_recursion_depth,
+            max_suspensions: limits.max_suspensions,
         }),
         type_check: request.type_check,
         type_check_stubs: request.type_check_stubs,
@@ -313,6 +322,10 @@ fn configure_from_component(request: ConfigureRequest) -> pb::Configure {
         type_check_format: i32::from(type_check_format_from_component(request.type_check_format)),
         type_check_color: request.type_check_color,
         protocol_version: PROTOCOL_VERSION,
+        // Frames arrive as one batch at the end of a turn, but their
+        // boundaries survive it: the host gets one print callback per frame,
+        // and a print collector charges its cap per frame.
+        print_flush_interval_ms: request.print_flush_interval_ms,
     }
 }
 

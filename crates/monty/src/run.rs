@@ -1,7 +1,10 @@
 //! Public interface for running Monty code.
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
+use std::{
+    mem,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 pub use monty_types::CompileOptions;
@@ -11,6 +14,7 @@ use ruff_python_stdlib::identifiers::is_identifier;
 use crate::{
     bytecode::{Code, CodeBuilder, Compiler, FrameExit, Opcode, VM},
     exception_private::{ExcTypeExt, RunError, RunResult},
+    function::Function,
     heap::{DropWithContext, Heap, HeapReader},
     host_modules::{HostModuleRegistry, HostModuleSource, HostModuleSpec},
     intern::{InternerBuilder, Interns, StringId},
@@ -28,9 +32,9 @@ use crate::{
 
 /// Primary interface for running Monty code.
 ///
-/// `MontyRun` supports two execution modes:
-/// - **Simple execution**: Use `run()` or `run_no_limits()` to run code to completion
-/// - **Iterative execution**: Use `start()` to start execution which will pause at external function calls and
+/// [`MontyRun`] supports two execution modes:
+/// - **Simple execution**: Use [`run`](Self::run) or [`run_no_limits`](Self::run_no_limits) to run code to completion
+/// - **Iterative execution**: Use [`start`](Self::start) to start execution which will pause at external function calls and
 ///   can be resumed later
 ///
 /// # Example
@@ -58,7 +62,7 @@ impl MontyRun {
     /// Creates a new run snapshot by parsing the given code.
     ///
     /// This only parses and prepares the code - no heap or namespaces are created yet.
-    /// Call `run_snapshot()` with inputs to start execution.
+    /// Call [`run`](Self::run) or [`start`](Self::start) with inputs to execute it.
     ///
     /// # Arguments
     /// * `code` - The Python code to execute
@@ -67,7 +71,7 @@ impl MontyRun {
     /// * `options` - [`CompileOptions`] controlling CPython divergences; usually `CompileOptions::default()`
     ///
     /// # Errors
-    /// Returns `MontyException` if the code cannot be parsed.
+    /// Returns [`MontyException`] if the code cannot be parsed.
     pub fn new(
         code: String,
         script_name: &str,
@@ -127,22 +131,22 @@ impl MontyRun {
     ///
     /// Creates the heap and namespaces, then begins execution.
     ///
-    /// For iterative execution, `start()` consumes self and returns a `RunProgress`:
-    /// - `RunProgress::FunctionCall(call)` - external function call, call `call.resume(return_value)` to resume
-    /// - `RunProgress::Complete(value)` - execution finished
+    /// For iterative execution, [`start`](Self::start) consumes self and returns a [`RunProgress`]:
+    /// - [`RunProgress::FunctionCall`] - external function call, call [`FunctionCall::resume`](crate::FunctionCall::resume) to resume
+    /// - [`RunProgress::Complete`] - execution finished
     ///
     /// This enables snapshotting execution state and returning control to the host
     /// application during long-running computations.
     ///
     /// # Arguments
-    /// * `inputs` - Initial input values (must match length of `input_names` from `new()`)
+    /// * `inputs` - Initial input values (must match length of `input_names` from [`new`](Self::new))
     /// * `resource_tracker` - Resource tracker for the execution
     /// * `print` - Writer for print output
     ///
     /// # Errors
-    /// Returns `MontyException` if:
+    /// Returns [`MontyException`] if:
     /// - The number of inputs doesn't match the expected count
-    /// - An input value is invalid (e.g., `MontyObject::Repr`)
+    /// - An input value is invalid (e.g., [`MontyObject::Repr`])
     /// - A runtime error occurs during execution
     ///
     /// # Panics
@@ -253,28 +257,26 @@ impl Executor {
         extra: Vec<HostModuleSource>,
     ) -> Result<Self, MontyException> {
         check_identifier(&input_names)?;
-        let parsed_entry = parse(&code, script_name).map_err(|e| e.into_python_exc(script_name, &code))?;
-        let mut interner = parsed_entry.interner;
-        let entry_nodes = parsed_entry.nodes;
+        let parse_result = parse(&code, script_name).map_err(|e| e.into_python_exc(script_name, &code))?;
+        let mut interner = parse_result.interner;
+        let entry_nodes = parse_result.nodes;
 
         let mut extra_asts = Vec::new();
         for module in extra {
             interner.intern(&module.name);
-            let parsed = parse_with_interner(&module.source, &module.filename, interner)
+            let nodes = parse_with_interner(&module.source, &module.filename, &mut interner)
                 .map_err(|e| e.into_python_exc(&module.filename, &module.source))?;
-            extra_asts.push((module, parsed.nodes));
-            interner = parsed.interner;
+            extra_asts.push((module, nodes));
         }
 
         let mut extra_prepared = Vec::new();
         for (module, nodes) in extra_asts {
             let filename = module.filename.clone();
             let source = module.source.clone();
-            let prepared =
-                prepare_with_existing_names(crate::parse::ParseResult { nodes, interner }, NameMap::default())
-                    .map_err(|e| e.into_python_exc(&filename, &source))?;
-            interner = prepared.interner;
-            extra_prepared.push((module, prepared.globals, prepared.nodes));
+            let mut module_globals = NameMap::default();
+            let prepared_nodes = prepare_with_existing_names(nodes, &interner, &mut module_globals)
+                .map_err(|e| e.into_python_exc(&filename, &source))?;
+            extra_prepared.push((module, module_globals, prepared_nodes));
         }
 
         let prepared = prepare(
@@ -285,21 +287,27 @@ impl Executor {
             input_names,
         )
         .map_err(|e| e.into_python_exc(script_name, &code))?;
-        let mut interns = Interns::new(prepared.interner, Vec::new());
 
+        // Compile host modules first so their FunctionIds sit ahead of the entry
+        // module's, then compile the entry itself. `compile_module` appends to
+        // `functions` and rolls back that prefix on failure.
         let mut functions = Vec::new();
         let mut host_specs = std::collections::HashMap::new();
         for (module, globals, nodes) in extra_prepared {
             let start = u32::try_from(functions.len()).unwrap_or(u32::MAX);
-            let compile_result =
-                Compiler::compile_module_with_functions(&nodes, &interns, &globals, functions, options)
-                    .map_err(|e| e.into_python_exc(&module.filename, &module.source))?;
-            functions = compile_result.functions;
+            let module_code = Compiler::compile_module(
+                &nodes,
+                &prepared.interner,
+                &globals,
+                &mut functions,
+                options,
+            )
+            .map_err(|e| e.into_python_exc(&module.filename, &module.source))?;
             let end = u32::try_from(functions.len()).unwrap_or(u32::MAX);
             host_specs.insert(
                 module.name,
                 HostModuleSpec {
-                    code: Arc::new(compile_result.code),
+                    code: Arc::new(module_code),
                     names: globals,
                     func_start: start,
                     func_end: end,
@@ -308,15 +316,20 @@ impl Executor {
         }
 
         let namespace_size = prepared.globals.len();
-        let compile_result =
-            Compiler::compile_module_with_functions(&prepared.nodes, &interns, &prepared.globals, functions, options)
-                .map_err(|e| e.into_python_exc(script_name, &code))?;
-        interns.set_functions(compile_result.functions);
+        let module_code = Compiler::compile_module(
+            &prepared.nodes,
+            &prepared.interner,
+            &prepared.globals,
+            &mut functions,
+            options,
+        )
+        .map_err(|e| e.into_python_exc(script_name, &code))?;
+
 
         Ok(Self {
             globals: prepared.globals,
-            module_code: Arc::new(compile_result.code),
-            interns,
+            module_code: Arc::new(module_code),
+            interns: Interns::new(prepared.interner, functions),
             code,
             input_slots: Vec::new(),
             assert_repr_max_bytes: options.assert_message_annotations.max_bytes(),
@@ -331,13 +344,19 @@ impl Executor {
         self.globals.len()
     }
 
-    /// Compiles one REPL snippet against existing session metadata.
+    /// Compiles one REPL snippet against the session's compiler tables.
     ///
-    /// This differs from [`new`](Self::new) in three ways required for true
-    /// no-replay REPL execution:
-    /// - Seeds parsing from `existing_interns` so old `StringId` values stay stable.
-    /// - Seeds compilation with existing functions so old `FunctionId` values remain valid.
-    /// - Reuses `existing_globals` and appends new global names only.
+    /// This differs from [`new`](Self::new) in that it *extends* the session's
+    /// `NameMap` and [`Interns`] rather than building fresh ones, so old
+    /// `StringId`/`FunctionId` values and global slots stay stable and the
+    /// snippet runs without replaying earlier code.
+    ///
+    /// The tables are moved into the returned executor (nothing is cloned — this
+    /// is what keeps feed cost independent of session size) and must be handed
+    /// back to the session once the snippet is finished with. On failure they
+    /// are left in place: the name slots and functions the rejected snippet
+    /// appended are rolled back so they can't eat into the `u16` id spaces,
+    /// while its interned strings stay (u32 ids, harmless and stable).
     ///
     /// `input_names` are pre-registered in the globals map before preparation so
     /// they receive stable namespace slots that the REPL input-injection logic
@@ -345,103 +364,39 @@ impl Executor {
     pub(crate) fn new_repl_snippet(
         code: String,
         script_name: &str,
-        mut existing_globals: NameMap,
-        existing_interns: &Interns,
+        globals: &mut NameMap,
+        interns: &mut Interns,
         input_names: &[String],
         options: CompileOptions,
         extra: Vec<HostModuleSource>,
     ) -> Result<Self, MontyException> {
         check_identifier(input_names)?;
 
-        let mut seeded_interner = InternerBuilder::from_interns(existing_interns, &code);
-        // Pre-register input names so they get stable slots before
-        // preparation, and capture each input's slot index so injection
-        // doesn't have to perform an O(N-interns) name→StringId scan at
-        // call time (one slot per input value, in order).
-        //
-        // Surfaced via the standard parse/prepare error path; if the
-        // embedder hands over more than `u16::MAX + 1` names the bytecode
-        // encoding can't represent them all.
-        let mut input_slots = Vec::with_capacity(input_names.len());
-        for name in input_names {
-            let name_id = seeded_interner.intern(name);
-            let slot = existing_globals
-                .ensure_slot(name_id, CodeRange::default())
-                .map_err(|e| e.into_python_exc(script_name, &code))?;
-            input_slots.push(slot);
-        }
-
-        // Parse the entry snippet, then host modules, sharing one intern pool
-        // (same shape as `new_with_host_modules`, but seeded from the REPL).
-        let parsed_entry = parse_with_interner(&code, script_name, seeded_interner)
-            .map_err(|e| e.into_python_exc(script_name, &code))?;
-        let mut interner = parsed_entry.interner;
-        let entry_nodes = parsed_entry.nodes;
-
-        let mut extra_asts = Vec::new();
-        for module in extra {
-            interner.intern(&module.name);
-            let parsed = parse_with_interner(&module.source, &module.filename, interner)
-                .map_err(|e| e.into_python_exc(&module.filename, &module.source))?;
-            extra_asts.push((module, parsed.nodes));
-            interner = parsed.interner;
-        }
-
-        let mut extra_prepared = Vec::new();
-        for (module, nodes) in extra_asts {
-            let filename = module.filename.clone();
-            let source = module.source.clone();
-            let prepared =
-                prepare_with_existing_names(crate::parse::ParseResult { nodes, interner }, NameMap::default())
-                    .map_err(|e| e.into_python_exc(&filename, &source))?;
-            interner = prepared.interner;
-            extra_prepared.push((module, prepared.globals, prepared.nodes));
-        }
-
-        let prepared = prepare_with_existing_names(
-            crate::parse::ParseResult {
-                nodes: entry_nodes,
-                interner,
-            },
-            existing_globals,
-        )
-        .map_err(|e| e.into_python_exc(script_name, &code))?;
-
-        let mut functions = existing_interns.functions_clone();
-        let mut interns = Interns::new(prepared.interner, Vec::new());
-        let mut host_specs = std::collections::HashMap::new();
-        for (module, globals, nodes) in extra_prepared {
-            let start = u32::try_from(functions.len()).unwrap_or(u32::MAX);
-            let compile_result =
-                Compiler::compile_module_with_functions(&nodes, &interns, &globals, functions, options)
-                    .map_err(|e| e.into_python_exc(&module.filename, &module.source))?;
-            functions = compile_result.functions;
-            let end = u32::try_from(functions.len()).unwrap_or(u32::MAX);
-            host_specs.insert(
-                module.name,
-                HostModuleSpec {
-                    code: Arc::new(compile_result.code),
-                    names: globals,
-                    func_start: start,
-                    func_end: end,
-                },
-            );
-        }
-
-        let compile_result = Compiler::compile_module_with_functions(
-            &prepared.nodes,
-            &interns,
-            &prepared.globals,
-            functions,
+        let globals_len = globals.len();
+        let (mut interner, mut functions) = mem::take(interns).into_builder();
+        let compiled = compile_repl_snippet(
+            &code,
+            script_name,
+            globals,
+            &mut interner,
+            &mut functions,
+            input_names,
             options,
-        )
-        .map_err(|e| e.into_python_exc(script_name, &code))?;
-        interns.set_functions(compile_result.functions);
+            extra,
+        );
+        // Whether or not compilation succeeded, the extended tables are the
+        // session's tables from here on (`compile_module` has already rolled
+        // back `functions` on failure).
+        *interns = Interns::new(interner, functions);
+        if compiled.is_err() {
+            globals.truncate(globals_len);
+        }
+        let (module_code, input_slots, host_specs) = compiled?;
 
         Ok(Self {
-            globals: prepared.globals,
-            module_code: Arc::new(compile_result.code),
-            interns,
+            globals: mem::take(globals),
+            module_code: Arc::new(module_code),
+            interns: mem::take(interns),
             code,
             input_slots,
             assert_repr_max_bytes: options.assert_message_annotations.max_bytes(),
@@ -453,7 +408,9 @@ impl Executor {
     /// Builds a synthetic REPL input that calls one existing global with host arguments.
     ///
     /// The argument tuple occupies a temporary namespace slot whose name mapping
-    /// must not be committed; appended interns remain valid session metadata.
+    /// must not be committed, so `existing_globals` is a throwaway copy. The
+    /// session's [`Interns`] are extended in place (two ids, no parse) and moved
+    /// into the executor on success; on failure they stay with the caller.
     #[expect(
         clippy::too_many_arguments,
         reason = "synthetic calls combine existing REPL and call-site metadata"
@@ -465,7 +422,7 @@ impl Executor {
         arg_count: usize,
         script_name: &str,
         mut existing_globals: NameMap,
-        existing_interns: &Interns,
+        interns: &mut Interns,
         options: CompileOptions,
     ) -> Result<Self, MontyException> {
         const CALL_ARGS_NAME: &str = "<monty-call-args>";
@@ -475,14 +432,13 @@ impl Executor {
         } else {
             format!("{name}(...)")
         };
-        let mut interner = InternerBuilder::from_interns(existing_interns, &code);
-        let filename = interner.intern(script_name);
+        let filename = interns.intern(script_name);
         let range = CodeRange {
             filename,
             start_byte: 0,
             end_byte: u32::try_from(code.len()).unwrap_or(u32::MAX),
         };
-        let args_name_id = interner.intern(CALL_ARGS_NAME);
+        let args_name_id = interns.intern(CALL_ARGS_NAME);
         let args_slot = existing_globals
             .ensure_slot(args_name_id, range)
             .map_err(|e| e.into_python_exc(script_name, &code))?;
@@ -503,12 +459,10 @@ impl Executor {
             .emit(Opcode::ReturnValue)
             .map_err(|e| e.into_python_exc(script_name, &code))?;
 
-        let functions = existing_interns.functions_clone();
-        let interns = Interns::new(interner, functions);
         Ok(Self {
             globals: existing_globals,
             module_code: Arc::new(builder.build(0)),
-            interns,
+            interns: mem::take(interns),
             code,
             input_slots: vec![args_slot],
             assert_repr_max_bytes: options.assert_message_annotations.max_bytes(),
@@ -791,6 +745,84 @@ pub struct RefCountOutput {
     /// the configured `gc_interval` to verify GC fired at the expected
     /// cadence.
     pub allocations_since_gc: u32,
+}
+
+/// Parse → prepare → compile pipeline for one REPL snippet, extending the
+/// session tables in place.
+///
+/// Split out of [`Executor::new_repl_snippet`] so every stage works on borrowed
+/// tables and any `?` early-return leaves them with the caller. Returns the
+/// module code and the namespace slot of each input, in order.
+fn compile_repl_snippet(
+    code: &str,
+    script_name: &str,
+    globals: &mut NameMap,
+    interner: &mut InternerBuilder,
+    functions: &mut Vec<Function>,
+    input_names: &[String],
+    options: CompileOptions,
+    extra: Vec<HostModuleSource>,
+) -> Result<(Code, Vec<NamespaceId>, std::collections::HashMap<String, HostModuleSpec>), MontyException> {
+    // Pre-register input names so they get stable slots before preparation,
+    // and capture each input's slot index so injection doesn't have to do a
+    // name→StringId lookup at call time (one slot per input value, in order).
+    //
+    // Surfaced via the standard parse/prepare error path; if the embedder
+    // hands over more than `u16::MAX + 1` names the bytecode encoding can't
+    // represent them all.
+    let mut input_slots = Vec::with_capacity(input_names.len());
+    for name in input_names {
+        let name_id = interner.intern(name);
+        let slot = globals
+            .ensure_slot(name_id, CodeRange::default())
+            .map_err(|e| e.into_python_exc(script_name, code))?;
+        input_slots.push(slot);
+    }
+
+    let entry_nodes =
+        parse_with_interner(code, script_name, interner).map_err(|e| e.into_python_exc(script_name, code))?;
+
+    let mut extra_asts = Vec::new();
+    for module in extra {
+        interner.intern(&module.name);
+        let nodes = parse_with_interner(&module.source, &module.filename, interner)
+            .map_err(|e| e.into_python_exc(&module.filename, &module.source))?;
+        extra_asts.push((module, nodes));
+    }
+
+    let mut extra_prepared = Vec::new();
+    for (module, nodes) in extra_asts {
+        let filename = module.filename.clone();
+        let source = module.source.clone();
+        let mut module_globals = NameMap::default();
+        let prepared_nodes = prepare_with_existing_names(nodes, interner, &mut module_globals)
+            .map_err(|e| e.into_python_exc(&filename, &source))?;
+        extra_prepared.push((module, module_globals, prepared_nodes));
+    }
+
+    let entry_nodes = prepare_with_existing_names(entry_nodes, interner, globals)
+        .map_err(|e| e.into_python_exc(script_name, code))?;
+
+    let mut host_specs = std::collections::HashMap::new();
+    for (module, module_globals, nodes) in extra_prepared {
+        let start = u32::try_from(functions.len()).unwrap_or(u32::MAX);
+        let module_code = Compiler::compile_module(&nodes, interner, &module_globals, functions, options)
+            .map_err(|e| e.into_python_exc(&module.filename, &module.source))?;
+        let end = u32::try_from(functions.len()).unwrap_or(u32::MAX);
+        host_specs.insert(
+            module.name,
+            HostModuleSpec {
+                code: Arc::new(module_code),
+                names: module_globals,
+                func_start: start,
+                func_end: end,
+            },
+        );
+    }
+
+    let module_code = Compiler::compile_module(&entry_nodes, interner, globals, functions, options)
+        .map_err(|e| e.into_python_exc(script_name, code))?;
+    Ok((module_code, input_slots, host_specs))
 }
 
 /// Check if input names are valid Python identifiers.

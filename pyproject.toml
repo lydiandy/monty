@@ -12,6 +12,11 @@ dev = [
     "maturin>=1.15.0,<2.0",
     "mypy>=2.1.0",
     "ruff>=0.14.7",
+    # markdown formatting (`make format-md`); style is in .mdformat.toml
+    "mdformat>=0.7.22",
+    "mdformat-tables>=1.0.0",
+    "mdformat-mkdocs>=5.2.1",
+    "mdformat-frontmatter>=2.1.2",
     "duckdb>=1.0.0",
     "httpx>=0.28.1",
     "playwright>=1.58.0",
@@ -24,6 +29,7 @@ dev = [
 docs = [
     "mkdocs>=1.6.1",
     "mkdocs-material>=9.7.7",
+    "mkdocstrings[python]>=0.30",
 ]
 
 # https://beta.ruff.rs/docs/configuration/
@@ -69,6 +75,11 @@ combine-as-imports = true
 known-first-party = ["pydantic_monty"]
 
 [tool.ruff.lint.per-file-ignores]
+"crates/monty/test_cases/{str,bytes}__percent_format.py" = [
+    "F504", # unused mapping key - tests that a mapping operand never reports leftovers
+    "F506", # mixed positional and named placeholders - tests CPython's argument consumption order
+    "F507", # placeholder/argument count mismatch - the point of the argument-count tests
+]
 "crates/monty/test_cases/*.py" = [
     "E722", # bare except - needed for testing try/except with bare except clauses
     "E711", # Comparison to `None` should be `cond is None`

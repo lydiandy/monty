@@ -3,6 +3,11 @@
 //! This module implements incremental snippet execution where each new snippet
 //! is compiled and executed against persistent heap/namespace state without
 //! replaying previously executed snippets.
+//!
+//! The session's compiler tables (`NameMap`, `Interns`) are append-only and are
+//! *moved* into each snippet's `Executor` and back via `commit_executor`, never
+//! cloned, so the cost of a feed depends on the snippet, not on how much the
+//! session has already run.
 
 use std::mem;
 
@@ -19,7 +24,7 @@ use crate::{
     bytecode::{FrameExit, VM, VMSnapshot},
     exception_private::{ExcTypeExt, RunError},
     heap::{DropWithContext, Heap, HeapData, HeapReader},
-    intern::{InternerBuilder, Interns},
+    intern::Interns,
     name_map::NameMap,
     object_bridge::MontyObjectExt,
     host_modules::HostModuleSource,
@@ -34,8 +39,8 @@ use crate::{
 
 /// Stateful REPL session that executes snippets incrementally without replay.
 ///
-/// `MontyRepl` preserves heap and global variable state between snippets.
-/// Each `feed()` compiles and executes only the new snippet against the current
+/// [`MontyRepl`] preserves heap and global variable state between snippets.
+/// Each [`feed_run`](Self::feed_run) or [`feed_start`](Self::feed_start) call compiles and executes only the new snippet against the current
 /// state, avoiding the cost and semantic risks of replaying prior code.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct MontyRepl {
@@ -47,8 +52,14 @@ pub struct MontyRepl {
     /// Counter for generated `<python-input-N>` execution filenames.
     next_input_id: u64,
     /// Stable mapping of global variable names to namespace slot IDs.
+    ///
+    /// Moved into each snippet's `Executor` rather than cloned (see
+    /// [`commit_executor`](Self::commit_executor)); empty while a snippet is in
+    /// flight or suspended, when the executor's copy is authoritative.
     global_names: NameMap,
     /// Persistent intern table across snippets so intern/function IDs remain valid.
+    ///
+    /// Same ownership hand-off as `global_names`.
     interns: Interns,
     /// Source text of every snippet that has been fed, keyed by its
     /// generated script name (`<python-input-N>`).
@@ -77,8 +88,8 @@ pub struct MontyRepl {
 impl MontyRepl {
     /// Creates an empty REPL session with no code parsed or executed.
     ///
-    /// All code execution is driven through `feed_run()` or `feed_start()`. This separates
-    /// construction from execution, matching the pattern used by `MontyRun::new()`.
+    /// All code execution is driven through [`feed_run`](Self::feed_run) or [`feed_start`](Self::feed_start). This separates
+    /// construction from execution, matching the pattern used by [`MontyRun::new`](crate::MontyRun::new).
     /// The [`CompileOptions`] apply to every snippet fed to the session.
     #[must_use]
     pub fn new(script_name: &str, resource_tracker: ResourceTracker, options: CompileOptions) -> Self {
@@ -88,7 +99,7 @@ impl MontyRepl {
             script_name: script_name.to_owned(),
             next_input_id: 0,
             global_names: NameMap::new(),
-            interns: Interns::new(InternerBuilder::default(), Vec::new()),
+            interns: Interns::default(),
             sources: AHashMap::new(),
             options,
             heap,
@@ -118,7 +129,7 @@ impl MontyRepl {
     /// Returns mutable access to the resource tracker for the next snippet.
     ///
     /// REPL hosts use this to install ephemeral execution controls, such as
-    /// async cancellation flags, before calling `feed_start()`.
+    /// async cancellation flags, before calling [`feed_start`](Self::feed_start).
     pub fn tracker_mut(&mut self) -> &mut ResourceTracker {
         &mut self.heap.tracker
     }
@@ -133,20 +144,20 @@ impl MontyRepl {
 
     /// Starts executing a new snippet and returns suspendable REPL progress.
     ///
-    /// This is the REPL equivalent of `MontyRun::start`: execution may complete,
+    /// This is the REPL equivalent of [`MontyRun::start`](crate::MontyRun::start): execution may complete,
     /// suspend at external calls / OS calls / unresolved futures, or raise a Python
     /// exception. Resume with the returned state object and eventually recover the
-    /// updated REPL from `ReplProgress::into_complete`.
+    /// updated REPL from [`ReplProgress::into_complete`].
     ///
-    /// Unlike `MontyRepl::feed`, this method consumes `self` so runtime state can be
+    /// Unlike [`MontyRepl::feed_run`], this method consumes `self` so runtime state can be
     /// safely moved into snapshot objects for serialization and cross-process resume.
     ///
     /// On a Python-level runtime exception the REPL is **not** destroyed: it is
-    /// returned inside `ReplStartError` so the caller can continue feeding
+    /// returned inside [`ReplStartError`] so the caller can continue feeding
     /// subsequent snippets against the same heap and namespace state.
     ///
     /// # Errors
-    /// Returns `Err(Box<ReplStartError>)` for syntax, compile-time, or runtime
+    /// Returns a boxed [`ReplStartError`] for syntax, compile-time, or runtime
     /// failures — the REPL session is always preserved inside the error.
     pub fn feed_start(
         self,
@@ -186,8 +197,8 @@ impl MontyRepl {
         let executor = match Executor::new_repl_snippet(
             code.to_owned(),
             &input_script_name,
-            this.global_names.clone(),
-            &this.interns,
+            &mut this.global_names,
+            &mut this.interns,
             &input_names,
             this.options,
             host_modules,
@@ -228,7 +239,10 @@ impl MontyRepl {
             Ok((converted, vm_state))
         }) {
             Ok((converted, vm_state)) => build_repl_progress(converted, vm_state, executor, this),
-            Err(error) => Err(Box::new(ReplStartError { repl: this, error })),
+            Err(error) => {
+                this.commit_executor(executor);
+                Err(Box::new(ReplStartError { repl: this, error }))
+            }
         }
     }
 
@@ -241,7 +255,7 @@ impl MontyRepl {
     /// matching Python REPL semantics.
     ///
     /// # Errors
-    /// Returns `MontyException` for syntax/compile/runtime failures.
+    /// Returns [`MontyException`] for syntax/compile/runtime failures.
     pub fn feed_run(
         &mut self,
         code: &str,
@@ -263,8 +277,8 @@ impl MontyRepl {
         let executor = Executor::new_repl_snippet(
             code.to_owned(),
             &input_script_name,
-            self.global_names.clone(),
-            &self.interns,
+            &mut self.global_names,
+            &mut self.interns,
             &input_names,
             self.options,
             Vec::new(),
@@ -293,22 +307,16 @@ impl MontyRepl {
             // Reclaim globals before cleanup.
             self.globals = vm.take_globals();
             Ok(result)
-        })?;
+        });
 
         // Commit compiler metadata even on runtime errors.
         // Snippets can mutate globals before raising, and those values may contain
         // FunctionId/StringId values that must be interpreted with the updated tables.
-        let Executor {
-            globals: snippet_globals,
-            interns,
-            ..
-        } = executor;
-        self.global_names = snippet_globals;
-        self.interns = interns;
+        self.commit_executor(executor);
 
         // Resolve every traceback frame against the source of the snippet that
         // produced it — frames from earlier snippets live in `self.sources`.
-        result.map_err(|e| e.into_python_exception(&self.interns, |fname| self.sources.get(fname).map(String::as_str)))
+        result?.map_err(|e| e.into_python_exception(&self.interns, |fname| self.sources.get(fname).map(String::as_str)))
     }
 
     /// Calls a Python function defined in the session by name.
@@ -317,7 +325,7 @@ impl MontyRepl {
     /// call expression so failures include a visible host call site.
     ///
     /// # Errors
-    /// Returns `MontyException` if the function is not found, not callable,
+    /// Returns [`MontyException`] if the function is not found, not callable,
     /// raises an exception, or encounters an external function call.
     pub fn call_function(
         &mut self,
@@ -339,6 +347,8 @@ impl MontyRepl {
         }
 
         let input_script_name = self.next_input_script_name();
+        // The name map is cloned (it is small) so the temporary args slot is
+        // never committed; the interns move into the executor and back.
         let executor = Executor::new_repl_function_call(
             name,
             name_id,
@@ -346,7 +356,7 @@ impl MontyRepl {
             args.len(),
             &input_script_name,
             self.global_names.clone(),
-            &self.interns,
+            &mut self.interns,
             self.options,
         )?;
         self.sources.insert(input_script_name, executor.code.clone());
@@ -442,6 +452,20 @@ impl MontyRepl {
         })
     }
 
+    /// Takes the session's compiler tables back from a finished snippet's executor.
+    ///
+    /// [`Executor::new_repl_snippet`] moves `global_names` and `interns` into the
+    /// executor instead of cloning them, so this must run on *every* path that
+    /// is done with an executor — success, runtime error, or abandoning a
+    /// suspended snippet. Skipping it would leave the session with empty
+    /// tables while globals still hold `FunctionId`/`StringId` values from
+    /// the snippet.
+    fn commit_executor(&mut self, executor: Executor) {
+        let Executor { globals, interns, .. } = executor;
+        self.global_names = globals;
+        self.interns = interns;
+    }
+
     /// Grows the globals vector to at least `size` slots.
     ///
     /// Newly introduced slots are initialized to `Undefined` to keep slot alignment
@@ -476,9 +500,9 @@ impl Drop for MontyRepl {
 
 /// Result of a single suspendable REPL snippet execution.
 ///
-/// This mirrors `RunProgress` but returns the updated `MontyRepl` on completion
+/// This mirrors [`RunProgress`](crate::RunProgress) but returns the updated [`MontyRepl`] on completion
 /// so callers can continue feeding additional snippets without replaying prior code.
-/// Each variant (except `Complete`) wraps a dedicated struct with only the relevant
+/// Each variant (except [`Complete`](Self::Complete)) wraps a dedicated struct with only the relevant
 /// resume methods.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub enum ReplProgress {
@@ -499,7 +523,7 @@ pub enum ReplProgress {
     },
 }
 
-/// Error returned when a REPL snippet raises a Python exception during `start()` or `resume()`.
+/// Error returned when a REPL snippet raises a Python exception during [`feed_start`](MontyRepl::feed_start) or a `resume()`.
 ///
 /// Unlike syntax/compile errors which consume the REPL, runtime errors preserve
 /// the full session state so the caller can inspect the error and continue feeding
@@ -514,7 +538,7 @@ pub struct ReplStartError {
 }
 
 impl ReplProgress {
-    /// Consumes the progress and returns the `ReplFunctionCall` struct.
+    /// Consumes the progress and returns the [`ReplFunctionCall`] struct.
     #[must_use]
     pub fn into_function_call(self) -> Option<ReplFunctionCall> {
         match self {
@@ -523,7 +547,7 @@ impl ReplProgress {
         }
     }
 
-    /// Consumes the progress and returns the `ReplResolveFutures` struct.
+    /// Consumes the progress and returns the [`ReplResolveFutures`] struct.
     #[must_use]
     pub fn into_resolve_futures(self) -> Option<ReplResolveFutures> {
         match self {
@@ -532,7 +556,7 @@ impl ReplProgress {
         }
     }
 
-    /// Consumes the progress and returns the `ReplNameLookup` struct.
+    /// Consumes the progress and returns the [`ReplNameLookup`] struct.
     #[must_use]
     pub fn into_name_lookup(self) -> Option<ReplNameLookup> {
         match self {
@@ -554,7 +578,7 @@ impl ReplProgress {
     /// the in-flight execution state.
     ///
     /// Use this to recover the REPL when you need to abandon the current
-    /// snippet (e.g. because `feed_run` doesn't support async futures).
+    /// snippet (e.g. because [`feed_run`](MontyRepl::feed_run) doesn't support async futures).
     /// The REPL state reflects any mutations that occurred before the
     /// snapshot was taken.
     #[must_use]
@@ -590,8 +614,8 @@ impl ReplProgress {
 
 /// REPL execution paused at an external function call or host-class method call.
 ///
-/// Resume with `resume(result, print)` to provide the return value and continue,
-/// or `resume_pending(print)` to push an `ExternalFuture` for async resolution.
+/// Resume with [`resume`](Self::resume) to provide the return value and continue,
+/// or [`resume_pending`](Self::resume_pending) to push an `ExternalFuture` for async resolution.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct ReplFunctionCall {
     /// The name of the function or method being called.
@@ -633,6 +657,11 @@ impl ReplFunctionCall {
     /// Uses `self.call_id` internally — no need to pass it again.
     pub fn resume_pending(self, print: PrintWriter<'_>) -> Result<ReplProgress, Box<ReplStartError>> {
         self.snapshot.run(ExtFunctionResult::Future(self.call_id), print)
+    }
+
+    /// Aborts the snippet with an uncatchable exception; see [`ReplOsCall::abort`].
+    pub fn abort(self, exc: MontyException, print: PrintWriter<'_>) -> Result<ReplProgress, Box<ReplStartError>> {
+        self.snapshot.abort(exc, print)
     }
 }
 
@@ -682,6 +711,13 @@ impl ReplOsCall {
         let result = handler(self.function_call);
         self.snapshot.run(result, print)
     }
+
+    /// Raises `exc` uncatchably at the suspended call.
+    ///
+    /// Always returns `Err` with a reusable session; see [`crate::OsCall::abort`].
+    pub fn abort(self, exc: MontyException, print: PrintWriter<'_>) -> Result<ReplProgress, Box<ReplStartError>> {
+        self.snapshot.abort(exc, print)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -693,8 +729,8 @@ impl ReplOsCall {
 /// host-backed object (a class instance or class type).
 ///
 /// The host should check if the name corresponds to a known external function,
-/// value, or instance attribute. Call `resume(result, print)` with the
-/// appropriate `NameLookupResult`. The namespace slot and scope are managed
+/// value, or instance attribute. Call [`resume`](Self::resume) with the
+/// appropriate [`NameLookupResult`]. The namespace slot and scope are managed
 /// internally.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct ReplNameLookup {
@@ -720,6 +756,11 @@ impl ReplNameLookup {
     #[must_use]
     pub fn object_id(&self) -> Option<MontyUuid> {
         self.scope.object_id()
+    }
+
+    /// Aborts the snippet with an uncatchable exception; see [`ReplOsCall::abort`].
+    pub fn abort(self, exc: MontyException, print: PrintWriter<'_>) -> Result<ReplProgress, Box<ReplStartError>> {
+        self.snapshot.abort(exc, print)
     }
 
     /// Resumes execution after name resolution.
@@ -777,7 +818,7 @@ impl ReplNameLookup {
 
 /// REPL execution state blocked on unresolved external futures.
 ///
-/// This is the REPL-aware counterpart to `ResolveFutures`.
+/// This is the REPL-aware counterpart to [`ResolveFutures`](crate::ResolveFutures).
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct ReplResolveFutures {
     /// Persistent REPL session state while this snippet is suspended.
@@ -798,10 +839,18 @@ impl ReplResolveFutures {
     /// cancelled or abandoned async snippet must put those globals back so
     /// previously defined REPL bindings remain available, and releases the
     /// suspended tasks and stack so nothing leaks into the session heap.
+    /// The compiler tables are committed too: the abandoned snippet may have
+    /// rebound a global to a function or literal only they can resolve.
     #[must_use]
     pub fn into_repl(self) -> MontyRepl {
-        let Self { mut repl, vm_state, .. } = self;
+        let Self {
+            mut repl,
+            executor,
+            vm_state,
+            ..
+        } = self;
         repl.globals = vm_state.abandon(&mut repl.heap);
+        repl.commit_executor(executor);
         repl
     }
 
@@ -811,13 +860,24 @@ impl ReplResolveFutures {
         &self.pending_call_ids
     }
 
+    /// Aborts with an uncatchable exception and abandons pending futures.
+    pub fn abort(self, exc: MontyException, print: PrintWriter<'_>) -> Result<ReplProgress, Box<ReplStartError>> {
+        let Self {
+            repl,
+            executor,
+            vm_state,
+            ..
+        } = self;
+        abort_restored(repl, executor, vm_state, exc, print)
+    }
+
     /// Resumes snippet execution with zero or more resolved futures.
     ///
     /// Supports incremental resolution: callers can provide only a subset of
     /// pending call IDs and continue resolving over multiple resumes.
     ///
     /// All errors — including API misuse (unknown `call_id`) and Python-level
-    /// runtime failures — are returned as `Err(Box<ReplStartError>)` so the REPL
+    /// runtime failures — are returned as a boxed [`ReplStartError`] so the REPL
     /// session is always preserved.
     pub fn resume(
         self,
@@ -867,7 +927,10 @@ impl ReplResolveFutures {
             Ok((converted, vm_state))
         }) {
             Ok((converted, vm_state)) => build_repl_progress(converted, vm_state, executor, repl),
-            Err(error) => Err(Box::new(ReplStartError { repl, error })),
+            Err(error) => {
+                repl.commit_executor(executor);
+                Err(Box::new(ReplStartError { repl, error }))
+            }
         }
     }
 }
@@ -959,10 +1022,37 @@ fn starts_with_triple_quote(source: &str) -> bool {
 // ReplSnapshot — internal execution state for suspend/resume
 // ---------------------------------------------------------------------------
 
-/// REPL execution state that can be resumed after an external call.
+/// Restores the REPL VM and aborts uncatchably, preserving its globals.
 ///
-/// This is the REPL-aware counterpart to `Snapshot`. It is `pub(crate)` —
-/// callers interact with the per-variant structs (`ReplFunctionCall`, etc.).
+/// Any armed OS effect is rolled back.
+fn abort_restored(
+    mut repl: MontyRepl,
+    executor: Executor,
+    vm_state: VMSnapshot,
+    exc: MontyException,
+    print: PrintWriter<'_>,
+) -> Result<ReplProgress, Box<ReplStartError>> {
+    let converted = HeapReader::with(&mut repl.heap, &mut (&executor, print), |reader, (executor, print)| {
+        let mut vm = VM::restore(
+            vm_state,
+            &executor.module_code,
+            reader,
+            &executor.interns,
+            print.reborrow(),
+            executor.assert_repr_max_bytes,
+        );
+        let vm_result = vm.abort(exc);
+        let converted = convert_frame_exit(vm_result, &mut vm);
+        // Uncatchable exceptions cannot suspend, so no snapshot is needed.
+        repl.globals = vm.take_globals();
+        converted
+    });
+    build_repl_progress(converted, None, executor, repl)
+}
+
+/// REPL execution state that can resume after suspension.
+///
+/// This is the internal REPL-aware counterpart to `Snapshot`.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ReplSnapshot {
     /// Persistent REPL session state while this snippet is suspended.
@@ -974,14 +1064,30 @@ pub(crate) struct ReplSnapshot {
 }
 
 impl ReplSnapshot {
+    /// Raises `exc` uncatchably at the suspension point.
+    fn abort(self, exc: MontyException, print: PrintWriter<'_>) -> Result<ReplProgress, Box<ReplStartError>> {
+        let Self {
+            repl,
+            executor,
+            vm_state,
+        } = self;
+        abort_restored(repl, executor, vm_state, exc, print)
+    }
+
     /// Extracts the REPL session, restoring globals from the VM snapshot.
     ///
     /// When a snapshot is taken, globals live inside the `VMSnapshot`; the rest
     /// of the in-flight state is released so the abandoned snippet leaks nothing
-    /// into the session heap.
+    /// into the session heap. The compiler tables are committed because the
+    /// restored globals may reference ids the abandoned snippet appended.
     fn into_repl(self) -> MontyRepl {
-        let Self { mut repl, vm_state, .. } = self;
+        let Self {
+            mut repl,
+            executor,
+            vm_state,
+        } = self;
         repl.globals = vm_state.abandon(&mut repl.heap);
+        repl.commit_executor(executor);
         repl
     }
 
@@ -1087,13 +1193,7 @@ fn build_repl_progress(
 
     match converted {
         ConvertedExit::Complete(obj) => {
-            let Executor {
-                globals: snippet_globals,
-                interns,
-                ..
-            } = executor;
-            repl.global_names = snippet_globals;
-            repl.interns = interns;
+            repl.commit_executor(executor);
             Ok(ReplProgress::Complete { repl, value: obj })
         }
         ConvertedExit::FunctionCall {
@@ -1137,13 +1237,7 @@ fn build_repl_progress(
             // Commit compiler metadata even on runtime errors, matching feed() behavior.
             // Snippets can create new variables or functions before raising, and those
             // values may reference FunctionId/StringId values from the new tables.
-            let Executor {
-                globals: snippet_globals,
-                interns,
-                ..
-            } = executor;
-            repl.global_names = snippet_globals;
-            repl.interns = interns;
+            repl.commit_executor(executor);
             Err(Box::new(ReplStartError { repl, error }))
         }
     }
