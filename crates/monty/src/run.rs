@@ -295,14 +295,8 @@ impl Executor {
         let mut host_specs = std::collections::HashMap::new();
         for (module, globals, nodes) in extra_prepared {
             let start = u32::try_from(functions.len()).unwrap_or(u32::MAX);
-            let module_code = Compiler::compile_module(
-                &nodes,
-                &prepared.interner,
-                &globals,
-                &mut functions,
-                options,
-            )
-            .map_err(|e| e.into_python_exc(&module.filename, &module.source))?;
+            let module_code = Compiler::compile_module(&nodes, &prepared.interner, &globals, &mut functions, options)
+                .map_err(|e| e.into_python_exc(&module.filename, &module.source))?;
             let end = u32::try_from(functions.len()).unwrap_or(u32::MAX);
             host_specs.insert(
                 module.name,
@@ -324,7 +318,6 @@ impl Executor {
             options,
         )
         .map_err(|e| e.into_python_exc(script_name, &code))?;
-
 
         Ok(Self {
             globals: prepared.globals,
@@ -762,7 +755,14 @@ fn compile_repl_snippet(
     input_names: &[String],
     options: CompileOptions,
     extra: Vec<HostModuleSource>,
-) -> Result<(Code, Vec<NamespaceId>, std::collections::HashMap<String, HostModuleSpec>), MontyException> {
+) -> Result<
+    (
+        Code,
+        Vec<NamespaceId>,
+        std::collections::HashMap<String, HostModuleSpec>,
+    ),
+    MontyException,
+> {
     // Pre-register input names so they get stable slots before preparation,
     // and capture each input's slot index so injection doesn't have to do a
     // name→StringId lookup at call time (one slot per input value, in order).

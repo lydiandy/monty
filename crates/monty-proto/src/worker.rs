@@ -539,12 +539,8 @@ impl Child {
             })
             .collect();
         let mut print = ProtoPrint::new(sink, self.print_flush_interval);
-        let result = repl.feed_start_with_host_modules(
-            &feed.code,
-            inputs,
-            PrintWriter::Callback(&mut print),
-            host_modules,
-        );
+        let result =
+            repl.feed_start_with_host_modules(&feed.code, inputs, PrintWriter::Callback(&mut print), host_modules);
         let event = self.drive(result, &mut print);
         print.drain();
         event

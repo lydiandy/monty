@@ -24,10 +24,10 @@ use crate::{
     bytecode::{FrameExit, VM, VMSnapshot},
     exception_private::{ExcTypeExt, RunError},
     heap::{DropWithContext, Heap, HeapData, HeapReader},
+    host_modules::HostModuleSource,
     intern::Interns,
     name_map::NameMap,
     object_bridge::MontyObjectExt,
-    host_modules::HostModuleSource,
     run::{CompileOptions, Executor},
     run_progress::{
         ConvertedExit, ExtFunctionResult, ExtFunctionResultExt, LookupAnswer, LookupScope, NameLookupResult,
@@ -791,7 +791,6 @@ impl ReplNameLookup {
                     executor.assert_repr_max_bytes,
                 );
                 vm.set_host_modules(&executor.host_modules);
-
 
                 // Resolve the name lookup result with the VM alive
                 let answer = LookupAnswer::new(result, &mut vm);
