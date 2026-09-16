@@ -21,12 +21,9 @@ pub(crate) mod binascii;
 pub(crate) mod collections;
 pub(crate) mod dataclasses;
 pub(crate) mod datetime;
-pub(crate) mod db;
 pub(crate) mod functools;
 #[cfg(feature = "test-hooks")]
 pub(crate) mod gc;
-pub(crate) mod gpui;
-pub(crate) mod gpui_base;
 pub(crate) mod itertools;
 pub(crate) mod json;
 pub(crate) mod math;
@@ -35,7 +32,6 @@ pub(crate) mod pathlib;
 pub(crate) mod re;
 pub(crate) mod sys;
 pub(crate) mod typing;
-pub(crate) mod ui;
 pub(crate) mod unicodedata;
 
 /// Built-in modules that can be imported.
@@ -77,18 +73,6 @@ pub(crate) enum StandardLib {
     /// The `binascii` module providing binary-to-ASCII conversions, CRC32,
     /// and the `Error` class used by `base64`.
     Binascii,
-    /// Former host UI runtime module. Discriminant kept so dump `LoadModule`
-    /// ids do not shift. Scripts import [`StandardLib::Ui`].
-    Gpui,
-    /// Former host widget constructors. Discriminant kept so dump `LoadModule`
-    /// ids do not shift. Scripts import [`StandardLib::Ui`].
-    GpuiBase,
-    /// Former host UI module. Discriminant kept so dump `LoadModule` ids do
-    /// not shift. Scripts import `ui` via host registration, not StandardLib.
-    Ui,
-    /// Former host database package. Discriminant kept so dump `LoadModule`
-    /// ids do not shift. Scripts import `db` via host registration.
-    Db,
     /// The `gc` module exposing a single `collect()` for tests. Only present
     /// under the `test-hooks` feature so production sandboxes never see it.
     ///
@@ -149,10 +133,6 @@ impl StandardLib {
             Self::Functools => functools::create_module(vm),
             Self::Base64 => base64::create_module(vm),
             Self::Binascii => binascii::create_module(vm),
-            Self::Gpui => gpui::create_module(vm),
-            Self::GpuiBase => gpui_base::create_module(vm),
-            Self::Ui => ui::create_module(vm),
-            Self::Db => db::create_module(vm),
             #[cfg(feature = "test-hooks")]
             Self::Gc => gc::create_module(vm),
         }
@@ -180,9 +160,6 @@ pub(crate) enum ModuleFunctions {
     Functools(functools::FunctoolsFunctions),
     Base64(base64::Base64Functions),
     Binascii(binascii::BinasciiFunctions),
-    Gpui(gpui::GpuiFunctions),
-    GpuiBase(gpui_base::GpuiBaseFunctions),
-    Ui(ui::UiFunctions),
     /// `gc` module functions — only present under the `test-hooks` feature.
     /// See [`gc`] for why it is gated; as in [`StandardLib`], the gated block
     /// goes last and new variants are appended ahead of it.
@@ -211,9 +188,6 @@ impl fmt::Display for ModuleFunctions {
             Self::Functools(func) => write!(f, "{func}"),
             Self::Base64(func) => write!(f, "{func}"),
             Self::Binascii(func) => write!(f, "{func}"),
-            Self::Gpui(func) => write!(f, "{func}"),
-            Self::GpuiBase(func) => write!(f, "{func}"),
-            Self::Ui(func) => write!(f, "{func}"),
             #[cfg(feature = "test-hooks")]
             Self::Gc(func) => write!(f, "{func}"),
             #[cfg(feature = "test-hooks")]
@@ -241,9 +215,6 @@ impl ModuleFunctions {
             Self::Functools(functions) => functools::call(vm, functions, args).map(CallResult::Value),
             Self::Base64(functions) => base64::call(vm, functions, args).map(CallResult::Value),
             Self::Binascii(functions) => binascii::call(vm, functions, args).map(CallResult::Value),
-            Self::Gpui(functions) => gpui::call(vm, functions, args).map(CallResult::Value),
-            Self::GpuiBase(functions) => gpui_base::call(vm, functions, args).map(CallResult::Value),
-            Self::Ui(functions) => ui::call(vm, functions, args).map(CallResult::Value),
             #[cfg(feature = "test-hooks")]
             Self::Gc(functions) => gc::call(vm, functions, args).map(CallResult::Value),
             #[cfg(feature = "test-hooks")]

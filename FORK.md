@@ -29,10 +29,6 @@ fork 独有的行为放进新文件。
 
 - `crates/monty/src/embed.rs` — `HostVtable`、`HostObject`、construct / call / attr 分发
 - `crates/monty/src/host_modules.rs` — 把应用目录里的 Python 当成真正的顶层模块
-- `crates/monty/src/modules/ui.rs`
-- `crates/monty/src/modules/gpui.rs`
-- `crates/monty/src/modules/gpui_base.rs`
-- `crates/monty/src/modules/db.rs`
 
 fork 仍会改的共享文件（冲突预算）：
 
@@ -45,7 +41,6 @@ fork 仍会改的共享文件（冲突预算）：
 | `crates/monty/src/heap/mod.rs` | `Heap.host: HostVtableSlot`，挨着其它弱索引 | 每加一个 `Heap` 字段 |
 | `crates/monty/src/bytecode/vm/call.rs` | `HostObject` 的 match 臂，挨着其它可调用对象 | 每加一种可调用 heap 类型 |
 | `crates/monty/src/dump_format.rs` | `StaticStrings` 和 `Type` 的 fingerprint 常量 | 上面每一处改动 |
-| `crates/monty/src/modules/mod.rs` | `Gc` 前面的 `StandardLib::{Gpui,GpuiBase,Ui,Db}` 墓碑 | 每加一个 stdlib 模块 |
 | `crates/monty/src/bytecode/vm/mod.rs` | `VM` 上的 `LoadHostModule` / `host_modules` | 上游改 import 时 |
 | `crates/monty/src/run.rs` | `Executor.host_modules` | 较少 |
 | `crates/monty/src/lib.rs` | 再导出 embed 类型 | rustfmt / 导出列表抖动 |
@@ -67,7 +62,7 @@ Git 看到的是最后一个变体上的同一个 hunk。
 | `dump_format.rs` | 旧 fork fingerprint | 旧上游 fingerprint | 枚举合并后再算一遍 |
 
 当时用的规则：**上游新加的尾部变体保住官方判别值；fork 独有的变体挪到它们后面。**
-`DUMP_VERSION` 仍是 8。
+`DUMP_VERSION` 现为 9（2026-09-16 去掉 StandardLib 产品墓碑）。
 官方 dump 还能解码。
 fork dump 如果已经按旧下标存了 `HostObject` / gpui `StaticStrings`，就不能了。
 
@@ -80,7 +75,7 @@ fork dump 如果已经按旧下标存了 `HostObject` / gpui `StaticStrings`，�
 
 ### 1. 能新建文件，就不要在共享文件里加 hunk
 
-宿主分发、控件构造、应用目录加载已经是这样做的（`embed.rs`、`modules/ui.rs`、`host_modules.rs`）。
+宿主分发、控件构造、应用目录加载已经是这样做的（`embed.rs`、`host_modules.rs`）。
 继续这样。
 `vm/mod.rs` 里 10 行钩子去调 `embed.rs`，比把 200 行宿主逻辑嵌进 VM 好合得多。
 
@@ -94,8 +89,8 @@ fork dump 如果已经按旧下标存了 `HostObject` / gpui `StaticStrings`，�
 `Module::set_attr` 吃 `impl Into<StringId>`。
 在创建模块时 intern（`vm.interns.intern("Button")`），不要加 `StaticStrings` 变体。
 
-只给字节码或 `StandardLib` 查找真正需要的名字留一份**很短**的静态表（例如 dump 仍要这些 id 时的模块名 `ui` / `gpui`）。
-新控件写在 `modules/ui.rs`，不要写进 `intern.rs`。
+只给字节码或 `StandardLib` 查找真正需要的名字留一份**很短**的静态表。
+产品模块（`ui` / `db` / `tui` / `reqwest`）走 `create_native_module`，不要写进 `intern.rs`，也不要写进 `StandardLib`。
 
 ### 3. fork 变体永远放最后
 
@@ -106,8 +101,7 @@ fork dump 如果已经按旧下标存了 `HostObject` / gpui `StaticStrings`，�
 - 合并时重放：先收下上游新尾巴，再把 fork 变体接回去
 
 `StandardLib::Gc` 有门控，必须保持最后（上游 dump 规则）。
-fork 墓碑 `Gpui` / `GpuiBase` / `Ui` / `Db` 紧挨在 `Gc` 前面。
-上游新模块会落到同一位置；把墓碑挪到它后面，仍然在 `Gc` 之前。
+产品模块不进 `StandardLib`。2026-09-16 已删 `Gpui` / `GpuiBase` / `Ui` / `Db` 墓碑，`DUMP_VERSION` 升到 9。不要再加回来。
 
 ### 4. 宿主状态能放 `VM` / `Executor`，就不要放 `Heap`
 
@@ -144,8 +138,8 @@ cargo test -p monty --offline serialized_components_match_dump_version -- --noca
   call、attr、repr、GC 都需要真正的 heap 值；多出来的复杂度，比每加一种 heap 类型冲突一个 match 臂更糟。
 - 不要为嵌入器功能去改 `crates/monty/src/heap.rs` 内部（分页 arena）。
 - 不要为了导出控件，在 `StandardLib` 里再复制一份 CPython stdlib。
-  `ui` / `db` 已经走 `HostVtable::create_native_module`。
-  剩下的 `StandardLib::{Gpui,Ui,Db}` 变体是 dump 墓碑；不要再加。
+  `ui` / `db` / `tui` / `reqwest` 只走 `HostVtable::create_native_module`。
+  不要再加 `StandardLib` 墓碑。
 
 ## 取舍
 
@@ -168,7 +162,7 @@ cargo test -p monty --offline serialized_components_match_dump_version -- --noca
 - 冲突：上表那六个文件（11 个 hunk）。
 - 结果：本地 `fork-main` 上的 `8b023e54 Merge origin/main into fork-main`。
 - `cargo check -p monty` 和 dump fingerprint 测试通过。
-- `make lint-rs` 仍会因 fork 里原有的 clippy 失败：`embed.rs` / `host_modules.rs` / `modules/ui.rs` / `modules/gpui.rs`（`absolute_paths`、`allow` vs `expect`、…）。跟这次合并无关。
+- `make lint-rs` 仍会因 fork 里原有的 clippy 失败：`embed.rs` / `host_modules.rs`（`absolute_paths`、`allow` vs `expect`、…）。跟这次合并无关。
 
 ### 2026-09-03（控件名离开 `StaticStrings`）
 
@@ -176,7 +170,7 @@ cargo test -p monty --offline serialized_components_match_dump_version -- --noca
 - `Interns::new` 把 `ui`、`gpui`、`gpui_base`、`db`、`__gpui_view__` intern 进动态池。
 - 宿主模块属性用 `Module::set_attr_str`（已有 intern 键就用，否则 heap `str`）。
 - `static_strings_fingerprint` 重新对上上游的 `0x0a4d_48bb_642d_1476`。
-- 新控件写在 `modules/ui.rs`，不要写进 `intern.rs`。
+- 新控件由 host 登记，不要写进 `intern.rs`，不要写进 `StandardLib`。
 
 ## 命令：手工合并上游
 
@@ -213,7 +207,7 @@ git merge origin/main
 git diff --name-only --diff-filter=U
 
 # 封闭枚举：先留上游新尾巴，再把 fork 独有变体接回去
-# （HostObject，StandardLib 墓碑在 Gc 前面）。
+# （HostObject。产品模块不进 StandardLib）。
 # 不要往 StaticStrings 加工件名。
 # Heap：host + boundary_index + host_type_index 都留。
 # call.rs：HostObject 和 Partial（以及上游新的可调用对象）都留。

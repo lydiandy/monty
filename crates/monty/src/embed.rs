@@ -804,28 +804,6 @@ pub(crate) fn dispatch_getattr(
     Ok(result.map(|value| CallResult::Value(host_value_to_value(ctx.vm, value))))
 }
 
-pub(crate) fn dispatch_construct(vm: &mut VM<'_>, name: &str, args: ArgValues) -> RunResult<Value> {
-    let host = vm
-        .heap
-        .host()
-        .ok_or_else(|| SimpleException::new_msg(ExcType::RuntimeError, "no embedder host attached to the heap"))?;
-    let (host_args, host_kwargs) = args_to_host(vm, args)?;
-    if !host_kwargs.is_empty() {
-        let names: Vec<_> = host_kwargs.into_iter().map(|(k, _)| k).collect();
-        return Err(SimpleException::new_msg(
-            ExcType::TypeError,
-            format!("{name}() got unexpected keyword argument(s): {}", names.join(", ")),
-        )
-        .into());
-    }
-    let mut ctx = VmHostCtx { vm };
-    let result = host
-        .borrow_mut()
-        .construct(&mut ctx, name, host_args)
-        .map_err(|msg| SimpleException::new_msg(ExcType::RuntimeError, msg))?;
-    Ok(host_value_to_value(ctx.vm, result))
-}
-
 pub(crate) fn dispatch_call(vm: &mut VM<'_>, id: HeapId, obj: HostObject, args: ArgValues) -> RunResult<CallResult> {
     if obj.kind == KIND_BOXED_MODULE_FN {
         let mf = unpack_module_function(obj.data);
@@ -1081,6 +1059,12 @@ fn value_to_host(vm: &mut VM<'_>, value: Value) -> RunResult<HostValue> {
         Value::Int(i) => Ok(HostValue::Int(i)),
         Value::Float(f) => Ok(HostValue::Float(f)),
         Value::InternString(id) => Ok(HostValue::Str(vm.interns.get_str(id).to_owned())),
+        Value::InternBytes(id) => {
+            let bytes = vm.interns.get_bytes(id).to_vec();
+            Ok(HostValue::Heap(
+                vm.heap.allocate(HeapData::Bytes(Bytes::new(bytes))),
+            ))
+        }
         Value::DefFunction(func_id) => {
             let id = vm.heap.allocate(HeapData::FunctionDefaults(FunctionDefaults {
                 func_id,
