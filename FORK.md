@@ -62,7 +62,7 @@ Git 看到的是最后一个变体上的同一个 hunk。
 | `dump_format.rs` | 旧 fork fingerprint | 旧上游 fingerprint | 枚举合并后再算一遍 |
 
 当时用的规则：**上游新加的尾部变体保住官方判别值；fork 独有的变体挪到它们后面。**
-`DUMP_VERSION` 现为 9（2026-09-16 去掉 StandardLib 产品墓碑）。
+`DUMP_VERSION` 现为 10（合入上游 Type 新变体后 HostObject 判别值后移）。
 官方 dump 还能解码。
 fork dump 如果已经按旧下标存了 `HostObject` / gpui `StaticStrings`，就不能了。
 

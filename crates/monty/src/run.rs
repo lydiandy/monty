@@ -1,14 +1,16 @@
 //! Public interface for running Monty code.
 use std::{
+    borrow::Cow,
     mem,
+    ops::ControlFlow,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
 };
 
-pub use monty_types::CompileOptions;
-use monty_types::{ExcType, MontyException, MontyObject, PrintWriter, ResourceTracker};
+use monty_types::{AssertMessageAnnotations, ExcType, MontyException, MontyObject, PrintWriter, ResourceTracker};
+pub use monty_types::{CompileOptions, HostClock};
 use ruff_python_stdlib::identifiers::is_identifier;
 
 use crate::{
@@ -28,6 +30,7 @@ use crate::{
     },
     types::str::StringRepr,
     value::Value,
+    virtual_path::{canonical_cwd, posix_join},
 };
 
 /// Primary interface for running Monty code.
@@ -66,7 +69,9 @@ impl MontyRun {
     ///
     /// # Arguments
     /// * `code` - The Python code to execute
-    /// * `script_name` - The script name for error messages
+    /// * `script_name` - The script name for error messages; its final path
+    ///   component is what `__file__` places under the working directory
+    ///   (`/main.py` for `main.py` or `src/main.py` at the root)
     /// * `input_names` - Names of input variables
     /// * `options` - [`CompileOptions`] controlling CPython divergences; usually `CompileOptions::default()`
     ///
@@ -85,6 +90,44 @@ impl MontyRun {
     #[must_use]
     pub fn code(&self) -> &str {
         &self.executor.code
+    }
+
+    /// Chooses what `date.today()` and `datetime.now()` read, replacing the
+    /// [`System`](HostClock::System) clock a runner starts with.
+    ///
+    /// Only [`run`](Self::run) and [`run_no_limits`](Self::run_no_limits)
+    /// consult it: they have no host to suspend to. Under
+    /// [`start`](Self::start) the host answers both calls itself, so a clock
+    /// set here is ignored.
+    ///
+    /// [`Denied`](HostClock::Denied) takes the clock away; [`Fixed`](HostClock::Fixed)
+    /// freezes an instant, for runs that have to be reproducible. Reading the
+    /// wall clock is a weak but real capability — see `docs/security.md`.
+    ///
+    /// ```
+    /// use monty::MontyRun;
+    /// use monty_types::{CompileOptions, HostClock, MontyObject};
+    ///
+    /// let code = "from datetime import date\ndate.today().year".to_owned();
+    /// let clock = HostClock::Fixed { unix_seconds: 1_700_000_000, microsecond: 0, local_offset_seconds: 0 };
+    /// let runner = MontyRun::new(code, "today.py", vec![], CompileOptions::default()).unwrap().with_host_clock(clock);
+    /// assert_eq!(runner.run_no_limits(vec![]).unwrap(), MontyObject::Int(2023));
+    /// ```
+    #[must_use]
+    pub fn with_host_clock(mut self, clock: HostClock) -> Self {
+        self.executor = self.executor.with_clock(clock);
+        self
+    }
+
+    /// Sets the sandbox working directory the run starts in (default `/`).
+    ///
+    /// `cwd` is an absolute POSIX virtual path, passed through
+    /// [`normalize_virtual_path`](monty_types::normalize_virtual_path) so
+    /// `os.getcwd()` reports a canonical directory: it is what relative paths
+    /// in `open()` / `os` / `pathlib` calls resolve against before reaching
+    /// the host. Hosts typically pass the first mount's virtual path.
+    pub fn set_cwd(&mut self, cwd: &str) {
+        self.executor.cwd = canonical_cwd(cwd);
     }
 
     /// Executes the code and returns both the result and reference count data, used for testing only.
@@ -171,7 +214,7 @@ impl MontyRun {
                     reader,
                     &executor.interns,
                     print.reborrow(),
-                    executor.assert_repr_max_bytes,
+                    executor.vm_env(),
                 );
                 executor.populate_inputs(inputs, &mut vm)?;
 
@@ -199,8 +242,10 @@ pub(crate) struct Executor {
     pub(crate) module_code: Arc<Code>,
     /// Interned strings used for looking up names and filenames during execution.
     pub(crate) interns: Interns,
-    /// Source code for error reporting (extracting preview lines for tracebacks).
-    pub(crate) code: String,
+    /// Source code for error reporting (extracting preview lines for
+    /// tracebacks). Shared with the REPL's per-snippet source table rather
+    /// than copied, since a snippet's text is the largest thing a feed carries.
+    pub(crate) code: Arc<str>,
     /// Namespace slots that the REPL input-injection path writes into.
     ///
     /// Pre-resolved at snippet-construction time so the per-call hot path
@@ -212,6 +257,19 @@ pub(crate) struct Executor {
     /// UTF-8 byte cap for each operand repr in introspected assert messages.
     /// Stored with the compiled program and passed to every VM.
     pub(crate) assert_repr_max_bytes: u32,
+    /// Clock serving `date.today()` / `datetime.now()` on the non-suspending
+    /// path; `System` unless the embedder chose otherwise.
+    #[serde(default = "default_clock")]
+    pub(crate) clock: HostClock,
+    /// The user-facing script name (`main.py`), whose final component
+    /// `__file__` is derived from. For REPL snippets this is the session's
+    /// name (shared with it, not copied per feed), not the `<python-input-N>`
+    /// name the snippet was parsed under.
+    pub(crate) script_name: Arc<str>,
+    /// Sandbox working directory every VM built from this executor starts in;
+    /// `/` unless the host set one (see [`MontyRun::set_cwd`]). Shared with
+    /// the REPL session like `script_name`.
+    pub(crate) cwd: Arc<str>,
     /// Estimated heap capacity for pre-allocation on subsequent runs.
     /// Uses AtomicUsize for thread-safety (required by PyO3's Sync bound).
     heap_capacity: AtomicUsize,
@@ -229,10 +287,76 @@ impl Clone for Executor {
             code: self.code.clone(),
             input_slots: self.input_slots.clone(),
             assert_repr_max_bytes: self.assert_repr_max_bytes,
+            clock: self.clock,
+            script_name: self.script_name.clone(),
+            cwd: self.cwd.clone(),
             heap_capacity: AtomicUsize::new(self.heap_capacity.load(Ordering::Relaxed)),
             host_modules: self.host_modules.clone(),
         }
     }
+}
+
+/// Per-run environment handed to a fresh VM: the sandbox working directory,
+/// what `__file__` derives from and the assert-repr cap. Built by
+/// [`Executor::vm_env`] so every `VM::new` call site agrees on how the
+/// values derive from the executor. Borrows rather than clones: a VM is
+/// built per run, so this must not allocate.
+pub(crate) struct VmEnv<'h> {
+    /// Working directory `os.getcwd()` reports and relative paths resolve
+    /// against. Borrowed from the executor until `os.chdir` replaces it.
+    pub(crate) cwd: Cow<'h, str>,
+    /// Working directory the run started in; `__file__` is `script_name`'s
+    /// final component placed under it, unaffected by a later `os.chdir`.
+    pub(crate) initial_cwd: &'h str,
+    /// User-facing script name (`main.py`), the basis of `__file__`.
+    pub(crate) script_name: &'h str,
+    /// UTF-8 byte cap for each operand repr in introspected assert messages.
+    pub(crate) assert_repr_max_bytes: u32,
+}
+
+impl VmEnv<'_> {
+    /// `__file__`: the script name under the starting working directory,
+    /// computed on read since most runs never look at it.
+    pub(crate) fn file(&self) -> String {
+        posix_join(self.initial_cwd, self.script_basename())
+    }
+
+    /// The script name as the sandbox sees it — what `sys.argv[0]` reports and
+    /// what [`file`](Self::file) places under the working directory.
+    ///
+    /// Only the final path component is kept because the script name is a
+    /// host-side label that may be a host path (`monty /home/me/app.py`), and
+    /// host directory structure must not leak into the sandbox.
+    pub(crate) fn script_basename(&self) -> &str {
+        self.script_name.rsplit(['/', '\\']).next().unwrap_or_default()
+    }
+}
+
+impl Default for VmEnv<'static> {
+    /// The environment of a VM built without an executor (in-module tests):
+    /// root working directory, no script.
+    fn default() -> Self {
+        Self {
+            cwd: Cow::Borrowed(DEFAULT_CWD),
+            initial_cwd: DEFAULT_CWD,
+            script_name: "",
+            assert_repr_max_bytes: AssertMessageAnnotations::DEFAULT_MAX_BYTES.get(),
+        }
+    }
+}
+
+/// The sandbox working directory used until a host sets one.
+pub(crate) const DEFAULT_CWD: &str = "/";
+
+/// Session identity a REPL snippet executor inherits: the user-facing script
+/// name and the working directory the snippet starts in. Both are shared
+/// (`Arc`) so building a snippet executor allocates neither.
+#[derive(Clone, Copy)]
+pub(crate) struct ReplSession<'a> {
+    /// User-facing script name (`main.py`), the basis of `__file__`.
+    pub(crate) script_name: &'a Arc<str>,
+    /// Absolute virtual working directory for the snippet.
+    pub(crate) cwd: &'a Arc<str>,
 }
 
 impl Executor {
@@ -323,18 +447,38 @@ impl Executor {
             globals: prepared.globals,
             module_code: Arc::new(module_code),
             interns: Interns::new(prepared.interner, functions),
-            code,
+            code: Arc::from(code),
             input_slots: Vec::new(),
             assert_repr_max_bytes: options.assert_message_annotations.max_bytes(),
+            clock: default_clock(),
+            script_name: Arc::from(script_name),
+            cwd: Arc::from(DEFAULT_CWD),
             heap_capacity: AtomicUsize::new(namespace_size),
             host_modules: HostModuleRegistry::new(host_specs),
         })
+    }
+
+    /// Builds the [`VmEnv`] a VM run from this executor starts with.
+    pub(crate) fn vm_env(&self) -> VmEnv<'_> {
+        VmEnv {
+            cwd: Cow::Borrowed(&self.cwd),
+            initial_cwd: &self.cwd,
+            script_name: &self.script_name,
+            assert_repr_max_bytes: self.assert_repr_max_bytes,
+        }
     }
 
     /// Returns the size of the module's global namespace (number of slots).
     #[inline]
     pub(crate) fn namespace_size(&self) -> usize {
         self.globals.len()
+    }
+
+    /// Replaces the clock serving `date.today()` / `datetime.now()`, so a
+    /// REPL snippet runs under its session's clock rather than the default.
+    pub(crate) fn with_clock(mut self, clock: HostClock) -> Self {
+        self.clock = clock;
+        self
     }
 
     /// Compiles one REPL snippet against the session's compiler tables.
@@ -353,15 +497,18 @@ impl Executor {
     ///
     /// `input_names` are pre-registered in the globals map before preparation so
     /// they receive stable namespace slots that the REPL input-injection logic
-    /// can use.
+    /// can use. `script_name` is the `<python-input-N>` name the snippet is
+    /// parsed under; `session` carries the user-facing name and working
+    /// directory the VM reports.
     pub(crate) fn new_repl_snippet(
-        code: String,
+        code: Arc<str>,
         script_name: &str,
         globals: &mut NameMap,
         interns: &mut Interns,
         input_names: &[String],
         options: CompileOptions,
         extra: Vec<HostModuleSource>,
+        session: ReplSession<'_>,
     ) -> Result<Self, MontyException> {
         check_identifier(input_names)?;
 
@@ -393,6 +540,10 @@ impl Executor {
             code,
             input_slots,
             assert_repr_max_bytes: options.assert_message_annotations.max_bytes(),
+            // Fail-closed placeholder; the owning `MontyRepl` overwrites it via `with_clock`.
+            clock: HostClock::Denied,
+            script_name: Arc::clone(session.script_name),
+            cwd: Arc::clone(session.cwd),
             heap_capacity: AtomicUsize::new(0),
             host_modules: HostModuleRegistry::new(host_specs),
         })
@@ -417,6 +568,7 @@ impl Executor {
         mut existing_globals: NameMap,
         interns: &mut Interns,
         options: CompileOptions,
+        session: ReplSession<'_>,
     ) -> Result<Self, MontyException> {
         const CALL_ARGS_NAME: &str = "<monty-call-args>";
 
@@ -456,9 +608,13 @@ impl Executor {
             globals: existing_globals,
             module_code: Arc::new(builder.build(0)),
             interns: mem::take(interns),
-            code,
+            code: Arc::from(code),
             input_slots: vec![args_slot],
             assert_repr_max_bytes: options.assert_message_annotations.max_bytes(),
+            // Fail-closed placeholder; the owning `MontyRepl` overwrites it via `with_clock`.
+            clock: HostClock::Denied,
+            script_name: Arc::clone(session.script_name),
+            cwd: Arc::clone(session.cwd),
             heap_capacity: AtomicUsize::new(0),
             host_modules: HostModuleRegistry::default(),
         })
@@ -492,7 +648,7 @@ impl Executor {
                 reader,
                 &executor.interns,
                 print.reborrow(),
-                executor.assert_repr_max_bytes,
+                executor.vm_env(),
             );
             executor.populate_inputs(inputs, &mut vm)?;
             executor.run_to_completion(&mut vm)
@@ -504,15 +660,16 @@ impl Executor {
 
         // Non-REPL execution has exactly one source, so every frame's filename
         // resolves to the same `self.code`.
-        result.map_err(|e| e.into_python_exception(&self.interns, |_| Some(self.code.as_str())))
+        result.map_err(|e| e.into_python_exception(&self.interns, |_| Some(&*self.code)))
     }
 
     /// Runs module code on an already-configured VM to completion.
     ///
     /// Executes [`VM::run_module`], then answers the lookup and `ExternalCall`
     /// exits no host will serve by raising `NameError` / `AttributeError`
-    /// through the VM so tracebacks are properly captured. Finally converts
-    /// the result via [`frame_exit_to_object`].
+    /// through the VM so tracebacks are properly captured, and answers the
+    /// clock OS calls from [`Executor::clock`]. Finally converts the result via
+    /// [`frame_exit_to_object`].
     ///
     /// This is the shared non-iterative execution core used by both the standard
     /// `run` path and the REPL's `feed_run` path.
@@ -542,8 +699,47 @@ impl Executor {
                     let err = ExcType::name_error(name);
                     frame_exit_result = vm.resume_with_exception(err.into());
                 }
-                other => return frame_exit_to_object(other, vm),
+                // `date.today()` / `datetime.now()` with a clock granted are
+                // answered in-process; every other exit converts as before.
+                Ok(exit) => match self.resolve_clock_call(vm, exit) {
+                    ControlFlow::Continue(resumed) => frame_exit_result = resumed,
+                    ControlFlow::Break(exit) => return frame_exit_to_object(Ok(exit), vm),
+                },
+                err => return frame_exit_to_object(err, vm),
             }
+        }
+    }
+
+    /// Answers `date.today()` / `datetime.now()` from [`Executor::clock`], for
+    /// the execution paths that have no host loop to suspend to.
+    ///
+    /// `Continue` carries the exit the VM reached after resuming with the time.
+    /// `Break` hands back everything else: every non-`OsCall` exit, every OS
+    /// call that is not a clock call, and a clock call carrying a
+    /// `PendingEffect`, which these two never do. Callers handle those
+    /// themselves, differently in `run` and `MontyRepl::call_function`.
+    pub(crate) fn resolve_clock_call(
+        &self,
+        vm: &mut VM<'_>,
+        exit: FrameExit,
+    ) -> ControlFlow<FrameExit, RunResult<FrameExit>> {
+        match exit {
+            FrameExit::OsCall {
+                function_call,
+                call_id,
+                effect: None,
+            } => match self.clock.resolve(&function_call) {
+                Some(result) => {
+                    function_call.drop_with(vm);
+                    ControlFlow::Continue(vm.resume(result))
+                }
+                None => ControlFlow::Break(FrameExit::OsCall {
+                    function_call,
+                    call_id,
+                    effect: None,
+                }),
+            },
+            other => ControlFlow::Break(other),
         }
     }
 
@@ -582,7 +778,7 @@ impl Executor {
                 reader,
                 &executor.interns,
                 PrintWriter::Stdout,
-                executor.assert_repr_max_bytes,
+                executor.vm_env(),
             );
             executor.populate_inputs(inputs, &mut vm)?;
             // Lookups are answered before the globals are taken below: an
@@ -632,7 +828,7 @@ impl Executor {
             // Convert return value while VM is still alive (needs access to interns).
             // Non-REPL: single source, so every frame resolves to `executor.code`.
             let py_object = frame_exit_to_object(frame_exit_result, &mut vm)
-                .map_err(|e| e.into_python_exception(&executor.interns, |_| Some(executor.code.as_str())))?;
+                .map_err(|e| e.into_python_exception(&executor.interns, |_| Some(&*executor.code)))?;
 
             // Drop globals with proper ref counting
             globals.drop_with(vm.heap);
@@ -675,6 +871,17 @@ impl Executor {
         }
         Ok(())
     }
+}
+
+/// The clock a runner or REPL session starts with: the host's own.
+///
+/// Standard execution has no host loop to ask, so denying it by default would
+/// make ordinary date-handling scripts raise — which is the whole of
+/// [#330](https://github.com/pydantic/monty/issues/330). Embedders that do not
+/// want sandboxed code reading their wall clock pass
+/// [`HostClock::Denied`](monty_types::HostClock::Denied) explicitly.
+pub(crate) fn default_clock() -> HostClock {
+    HostClock::System
 }
 
 /// Converts module/frame exit results into plain `MontyObject` outputs.

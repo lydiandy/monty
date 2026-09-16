@@ -600,21 +600,6 @@ pub struct Configure {
     #[prost(uint32, optional, tag = "10")]
     pub print_flush_interval_ms: ::core::option::Option<u32>,
 }
-/// One host-registered top-level Python module (`widgets.py` → import name
-/// `widgets`). Compiled with the feed snippet so `from widgets import …` works
-/// without a host filesystem mount (browser / wasm).
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct HostModuleSource {
-    /// Import name (`widgets` in `from widgets import button`).
-    #[prost(string, tag = "1")]
-    pub name: ::prost::alloc::string::String,
-    /// Path used in tracebacks.
-    #[prost(string, tag = "2")]
-    pub filename: ::prost::alloc::string::String,
-    /// Module source.
-    #[prost(string, tag = "3")]
-    pub source: ::prost::alloc::string::String,
-}
 /// Executes one snippet against the session. Turn ends with `Complete`,
 /// `Error`, `TypingError`, or a suspension event.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -626,10 +611,11 @@ pub struct Feed {
     /// Skip type checking for this feed even when the session enables it.
     #[prost(bool, tag = "3")]
     pub skip_type_check: bool,
-    /// Optional host app-dir modules for this feed (LoadHostModule). Empty on
-    /// stock feeds; browser uses this instead of MountDir.
-    #[prost(message, repeated, tag = "4")]
-    pub host_modules: ::prost::alloc::vec::Vec<HostModuleSource>,
+    /// Absolute virtual working directory to switch the session to before the
+    /// feed, resolved by the parent (an explicit choice, or the first mount on
+    /// the session's first feed). Empty keeps the session's current directory.
+    #[prost(string, tag = "4")]
+    pub cwd: ::prost::alloc::string::String,
 }
 /// Ends a pending suspension by raising `exception` uncatchably at its site.
 /// The session returns ready in an `Error` event. Hosts use this to stop a feed,
@@ -676,6 +662,8 @@ pub mod resume_name_lookup {
 /// call ids.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ResumeFutures {
+    /// Also answers an eager FunctionCall with exactly one result matching its
+    /// call_id. The worker creates a settled awaitable before continuing.
     #[prost(message, repeated, tag = "1")]
     pub results: ::prost::alloc::vec::Vec<FutureResult>,
 }
@@ -782,14 +770,23 @@ pub mod child_event {
         Shutdown(super::ShutdownDump),
     }
 }
-/// Streamed sandbox print() output. Zero or more of these precede each
-/// turn-ending event; text is flushed at line granularity.
+/// One run of print() output on a single stream, as one `Print` event may
+/// carry several.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct Print {
+pub struct PrintSegment {
     #[prost(enumeration = "PrintStream", tag = "1")]
     pub stream: i32,
     #[prost(string, tag = "2")]
     pub text: ::prost::alloc::string::String,
+}
+/// Streamed sandbox print() output. Zero or more of these precede each
+/// turn-ending event, and each carries the runs the worker had buffered, in
+/// the order the sandbox produced them — so output alternating between the
+/// streams batches into one event without losing that order.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Print {
+    #[prost(message, repeated, tag = "3")]
+    pub segments: ::prost::alloc::vec::Vec<PrintSegment>,
 }
 /// Suspension: the sandbox called an external function, or — when `object_id`
 /// is set — a method on a host-backed object (the receiver is NOT included in
@@ -810,6 +807,11 @@ pub struct FunctionCall {
     /// The uuid of the receiver; absent for plain external function calls.
     #[prost(message, optional, tag = "5")]
     pub object_id: ::core::option::Option<Uuid>,
+    /// The host may await a coroutine and answer with ResumeFutures for this
+    /// call_id. Synchronous results use ResumeCall; returning a pending
+    /// future remains valid. Absent/false requires the ordinary call reply.
+    #[prost(bool, tag = "6")]
+    pub allow_eager_await: bool,
 }
 /// Suspension: the sandbox performed an OS operation, surfaced for the parent
 /// to service (e.g. from a mount) or answer with `ResumeCall`. One typed arm
@@ -828,7 +830,7 @@ pub struct OsCall {
     pub call_id: u32,
     #[prost(
         oneof = "os_call::Call",
-        tags = "2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24"
+        tags = "2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25"
     )]
     pub call: ::core::option::Option<os_call::Call>,
 }
@@ -888,6 +890,13 @@ pub mod os_call {
         /// Fixed-offset timezone for an aware result; absent for a naive one.
         #[prost(message, optional, tag = "1")]
         pub tz: ::core::option::Option<super::TimeZone>,
+    }
+    /// os.urandom(size) — the byte count the sandbox validated; unsigned so
+    /// a negative count cannot be expressed on the wire.
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+    pub struct Urandom {
+        #[prost(uint64, tag = "1")]
+        pub size: u64,
     }
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Call {
@@ -963,6 +972,9 @@ pub mod os_call {
         /// datetime.now(tz) — the timezone argument (absent for a naive result).
         #[prost(message, tag = "24")]
         DateTimeNow(DateTimeNow),
+        /// os.urandom(size), also how `random` seeds an unseeded generator.
+        #[prost(message, tag = "25")]
+        Urandom(Urandom),
     }
 }
 /// Suspension: the sandbox read an undefined name — typically probing whether

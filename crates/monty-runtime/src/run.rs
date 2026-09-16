@@ -23,14 +23,23 @@ use monty::{MontyRepl, MontyRun, ReplContinuationMode, ReplProgress, RunProgress
 use monty_fs::{MountCallOutcome, MountMode, MountTable, OverlayState};
 use monty_type_checking::{SourceFile, TypeChecker};
 use monty_types::{
-    CompileOptions, DEFAULT_MAX_SUSPENSIONS, ExcType, ExtFunctionResult, MontyException, MontyObject, NameLookupResult,
-    OsFunctionCall, PrintWriter, ResourceLimits, ResourceTracker, TypeCheckingConfig,
+    CompileOptions, DEFAULT_MAX_SUSPENSIONS, ExcType, ExtFunctionResult, HostClock, MontyException, MontyObject,
+    NameLookupResult, OsFunctionCall, PrintWriter, ResourceLimits, ResourceTracker, TypeCheckingConfig, validate_cwd,
 };
 use rustyline::{DefaultEditor, error::ReadlineError};
 #[cfg(feature = "telemetry")]
 use tracing::field::Empty;
 
 use crate::Cli;
+
+/// The clock the CLI lends to sandboxed code for `date.today()` and
+/// `datetime.now()`.
+///
+/// The same clock a fresh [`MontyRun`] already has, named here so the CLI's
+/// choice does not quietly follow a change to that default.
+/// [`handle_os_call`] reads it too, so the mounted REPL path answers the
+/// suspended calls from the same source.
+const CLI_CLOCK: HostClock = HostClock::System;
 
 /// Dim/gray text (timings). `{DIM}` opens the style, `{DIM:#}` closes it.
 const DIM: Style = Style::new().dimmed();
@@ -107,8 +116,16 @@ fn run_cli(cli: Cli) -> ExitCode {
         .expect("monty-runtime must install LimitedAllocator globally");
 
     // Build mount table early to fail fast on bad -m args.
-    let mount_table = match build_mount_table(&cli.mounts) {
-        Ok(mt) => mt,
+    let (mount_table, first_mount) = match build_mount_table(&cli.mounts) {
+        Ok(Some((mt, first_mount))) => (Some(mt), Some(first_mount)),
+        Ok(None) => (None, None),
+        Err(err) => {
+            eprintln!("{BOLD_RED}error{BOLD_RED:#}: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let cwd = match sandbox_cwd(cli.cwd.as_deref(), first_mount) {
+        Ok(cwd) => cwd,
         Err(err) => {
             eprintln!("{BOLD_RED}error{BOLD_RED:#}: {err}");
             return ExitCode::FAILURE;
@@ -121,9 +138,9 @@ fn run_cli(cli: Cli) -> ExitCode {
             return ExitCode::FAILURE;
         }
         return if cli.interactive {
-            dispatch_repl("<string>", &cmd, limits, mount_table)
+            dispatch_repl("<string>", &cmd, limits, mount_table, &cwd)
         } else {
-            dispatch_script("<string>", cmd, type_check, limits, mount_table)
+            dispatch_script("<string>", cmd, type_check, limits, mount_table, &cwd)
         };
     }
 
@@ -136,13 +153,22 @@ fn run_cli(cli: Cli) -> ExitCode {
             }
         };
         return if cli.interactive {
-            dispatch_repl(file_path, &code, limits, mount_table)
+            dispatch_repl(file_path, &code, limits, mount_table, &cwd)
         } else {
-            dispatch_script(file_path, code, type_check, limits, mount_table)
+            dispatch_script(file_path, code, type_check, limits, mount_table, &cwd)
         };
     }
 
-    dispatch_repl("repl.py", "", limits, mount_table)
+    dispatch_repl("repl.py", "", limits, mount_table, &cwd)
+}
+
+/// Resolves the sandbox working directory: `--cwd`, else the first `--mount`
+/// virtual path, else `/`. An explicit value goes through the shared [`validate_cwd`].
+fn sandbox_cwd(cwd: Option<&str>, first_mount: Option<String>) -> Result<String, String> {
+    match cwd {
+        Some(cwd) => validate_cwd(cwd).map_err(|message| format!("--{message}")),
+        None => Ok(first_mount.unwrap_or_else(|| "/".to_owned())),
+    }
 }
 
 /// Builds the tracker from the CLI resource limits and runs the script.
@@ -152,13 +178,27 @@ fn dispatch_script(
     type_check: Option<TypeCheckingConfig>,
     limits: ResourceLimits,
     mount_table: Option<MountTable>,
+    cwd: &str,
 ) -> ExitCode {
-    run_script(file_path, code, type_check, ResourceTracker::new(limits), mount_table)
+    run_script(
+        file_path,
+        code,
+        type_check,
+        ResourceTracker::new(limits),
+        mount_table,
+        cwd,
+    )
 }
 
 /// REPL analog of [`dispatch_script`].
-fn dispatch_repl(file_path: &str, code: &str, limits: ResourceLimits, mount_table: Option<MountTable>) -> ExitCode {
-    run_repl(file_path, code, ResourceTracker::new(limits), mount_table)
+fn dispatch_repl(
+    file_path: &str,
+    code: &str,
+    limits: ResourceLimits,
+    mount_table: Option<MountTable>,
+    cwd: &str,
+) -> ExitCode {
+    run_repl(file_path, code, ResourceTracker::new(limits), mount_table, cwd)
 }
 
 /// Executes a Python file in one-shot CLI mode.
@@ -176,6 +216,7 @@ fn run_script(
     type_check: Option<TypeCheckingConfig>,
     tracker: ResourceTracker,
     mut mount_table: Option<MountTable>,
+    cwd: &str,
 ) -> ExitCode {
     if let Some(config) = type_check {
         let start = Instant::now();
@@ -198,13 +239,14 @@ fn run_script(
     let input_names = vec![];
     let inputs = vec![];
 
-    let runner = match MontyRun::new(code, file_path, input_names, CompileOptions::default()) {
-        Ok(ex) => ex,
+    let mut runner = match MontyRun::new(code, file_path, input_names, CompileOptions::default()) {
+        Ok(ex) => ex.with_host_clock(CLI_CLOCK),
         Err(err) => {
             eprintln!("{BOLD_RED}error{BOLD_RED:#}:\n{err}");
             return ExitCode::FAILURE;
         }
     };
+    runner.set_cwd(cwd);
 
     // Use the start() + loop path when mounts are configured or external functions
     // are enabled, since we need to intercept OsCalls.
@@ -273,9 +315,17 @@ fn run_script(
 ///
 /// Returns `ExitCode::SUCCESS` on EOF or `exit`, and `ExitCode::FAILURE` on
 /// initialization or I/O errors.
-fn run_repl(file_path: &str, code: &str, tracker: ResourceTracker, mut mount_table: Option<MountTable>) -> ExitCode {
+fn run_repl(
+    file_path: &str,
+    code: &str,
+    tracker: ResourceTracker,
+    mut mount_table: Option<MountTable>,
+    cwd: &str,
+) -> ExitCode {
     let mut suspensions = SuspensionBudget::new(&tracker);
-    let mut repl = Some(MontyRepl::new(file_path, tracker, CompileOptions::default()));
+    let mut repl = MontyRepl::new(file_path, tracker, CompileOptions::default()).with_host_clock(CLI_CLOCK);
+    repl.set_cwd(cwd);
+    let mut repl = Some(repl);
 
     if !code.is_empty() {
         execute_repl_snippet(&mut repl, code, &mut mount_table, &mut suspensions);
@@ -582,6 +632,12 @@ impl SuspensionBudget {
 /// successful `MontyObject` or an exception for errors / unsupported
 /// operations.
 fn handle_os_call(call: OsFunctionCall, mount_table: &mut Option<MountTable>) -> ExtFunctionResult {
+    // The clock answers `date.today()` / `datetime.now()` here for the same
+    // reason it is granted to the non-suspending path: the CLI is the host, and
+    // a local script expecting CPython's clock should get one either way.
+    if let Some(now) = CLI_CLOCK.resolve(&call) {
+        return now.into();
+    }
     match mount_table.as_mut() {
         Some(mounts) => match mounts.handle_os_call(call) {
             MountCallOutcome::Handled(Ok(obj)) => obj.into(),
@@ -619,23 +675,26 @@ fn resolve_external_call(function_name: &str, args: &[MontyObject]) -> Result<Mo
 // Mount parsing
 // =============================================================================
 
-/// Builds a [`MountTable`] from CLI `-m` arguments.
+/// Builds a [`MountTable`] from CLI `-m` arguments, returning it with the
+/// first mount's virtual path (the default sandbox working directory).
 ///
 /// Returns `None` if no mounts were specified. Fails early with a descriptive
 /// error if any mount spec is malformed or the host path doesn't exist.
-fn build_mount_table(mount_args: &[String]) -> Result<Option<MountTable>, String> {
+fn build_mount_table(mount_args: &[String]) -> Result<Option<(MountTable, String)>, String> {
     if mount_args.is_empty() {
         return Ok(None);
     }
 
     let mut table = MountTable::new();
+    let mut first_virtual_path = None;
     for arg in mount_args {
         let (host_path, virtual_path, mode, write_bytes_limit) = parse_mount(arg)?;
         table
             .mount(&virtual_path, &host_path, mode, write_bytes_limit)
             .map_err(|e| format!("mount {arg}: {e}"))?;
+        first_virtual_path.get_or_insert(virtual_path);
     }
-    Ok(Some(table))
+    Ok(first_virtual_path.map(|first| (table, first)))
 }
 
 /// Parses a single mount specification string.

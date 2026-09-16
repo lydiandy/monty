@@ -658,13 +658,13 @@ impl Embed {
                 reader,
                 &executor.interns,
                 PrintWriter::Disabled,
-                executor.assert_repr_max_bytes,
+                executor.vm_env(),
             );
             vm.set_host_modules(&executor.host_modules);
             let result = executor
                 .run_to_completion(&mut vm)
                 .map(|_| ())
-                .map_err(|e| e.into_python_exception(&executor.interns, |_| Some(executor.code.as_str())));
+                .map_err(|e| e.into_python_exception(&executor.interns, |_| Some(&*executor.code)));
             *slot = Some(vm.take_globals());
             result
         });
@@ -685,7 +685,7 @@ impl Embed {
                 reader,
                 &executor.interns,
                 PrintWriter::Disabled,
-                executor.assert_repr_max_bytes,
+                executor.vm_env(),
             );
             vm.set_host_modules(&executor.host_modules);
             let result = f(&mut vm);

@@ -213,24 +213,14 @@ interface worker {
         print-flush-interval-ms: option<u32>,
     }
 
-    /// One host-registered top-level Python module (`widgets.py` → `widgets`).
-    record host-module-source {
-        /// Import name (`widgets` in `from widgets import button`).
-        name: string,
-        /// Path used in tracebacks.
-        filename: string,
-        /// Module source.
-        source: string,
-    }
-
     /// One Python snippet and its host inputs.
     record feed-request {
         code: string,
         inputs: list<named-value>,
         skip-type-check: bool,
-        /// Host app-dir modules for this feed (`LoadHostModule`). Browser uses
-        /// this instead of MountDir (no host filesystem).
-        host-modules: list<host-module-source>,
+        /// Absolute virtual working directory to switch the session to; empty
+        /// keeps its current one (`/` until a feed or `os.chdir` changes it).
+        cwd: string,
     }
 
     /// A host-raised exception used to resume a call.
@@ -322,6 +312,8 @@ interface worker {
         /// Uuid string of the routed receiver (instance or class type);
         /// absent for plain external calls.
         object-id: option<string>,
+        /// A coroutine may settle before replying with resume-futures.
+        allow-eager-await: bool,
     }
 
     /// A suspended name or lazy-attribute lookup.

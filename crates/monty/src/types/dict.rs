@@ -23,12 +23,15 @@ use crate::{
     },
     identity::Identity,
     intern::{Interns, StaticStrings},
-    modules::collections::{
-        counter::{
-            CounterCmp, CounterOp, counter_binary_op, counter_compare, counter_elements, counter_inplace_op,
-            counter_most_common, counter_order, counter_total, counter_unary_op, counter_update_method,
+    modules::{
+        collections::{
+            counter::{
+                CounterCmp, CounterOp, counter_binary_op, counter_compare, counter_elements, counter_inplace_op,
+                counter_most_common, counter_order, counter_total, counter_unary_op, counter_update_method,
+            },
+            defaultdict::defaultdict_missing,
         },
-        defaultdict::defaultdict_missing,
+        copy::{Memo, PyDeepCopy, clone_pair, deep_copy, deep_copy_pair},
     },
     types::Type,
     value::{EitherStr, VALUE_SIZE, Value, eq_bigint, eq_bytes, eq_f64, eq_i64, eq_str},
@@ -377,6 +380,55 @@ fn json_key_equals_str(key: &Value, expected: &str, heap: &Heap, interns: &Inter
 }
 
 impl<'h> HeapRead<'h, Dict> {
+    /// Allocates an empty dict carrying this one's flavour — plain,
+    /// `defaultdict` (with a counted reference to the same factory) or
+    /// `Counter`.
+    ///
+    /// For rebuilding a dict whose entries are produced one at a time, where
+    /// the copy must exist before it can be filled; `copy` memoizes the empty
+    /// shell so a dict holding itself terminates.
+    pub(crate) fn allocate_empty_like(&self, vm: &mut VM<'h>) -> HeapId {
+        let kind = self.get(vm.heap).cloned_kind(vm.heap);
+        let mut dict = Dict::new();
+        dict.set_kind(kind);
+        vm.heap.allocate(HeapData::Dict(dict))
+    }
+
+    /// Allocates an empty dict carrying this one's flavour, with a
+    /// `defaultdict`'s factory deep-copied rather than shared.
+    ///
+    /// `defaultdict`'s reducer hands the factory to the reconstructor as its
+    /// argument, so CPython deep-copies it before the memo entry exists — the
+    /// same ordering `functools.partial` uses for its callable, and the reason
+    /// a factory reachable from the dict recurses to the limit in both. Only
+    /// `deepcopy` does this: `copy.copy` shares the factory, which is what
+    /// [`allocate_empty_like`](Self::allocate_empty_like) is for.
+    ///
+    /// The rebuilt factory is checked exactly as the constructor checks the one
+    /// it is handed, because the reconstructor *is* that constructor in
+    /// CPython: a `__deepcopy__` returning a non-callable fails there too.
+    fn allocate_empty_deep_copy(&self, memo: &mut Memo, vm: &mut VM<'h>) -> RunResult<HeapId> {
+        let Some(factory) = self.get(vm.heap).default_factory() else {
+            return Ok(self.allocate_empty_like(vm));
+        };
+        let factory = factory.clone_with_heap(vm.heap);
+        let copied = deep_copy(&factory, memo, vm);
+        factory.drop_with(vm);
+        let copied = match copied? {
+            // `defaultdict(None)` is the factory-less form, so a hook returning
+            // `None` lands there rather than raising.
+            Value::None => None,
+            copied if copied.is_callable(vm.heap) => Some(copied),
+            copied => {
+                copied.drop_with(vm);
+                return Err(ExcType::defaultdict_factory_not_callable());
+            }
+        };
+        let mut dict = Dict::new();
+        dict.set_kind(DictKind::defaultdict(copied));
+        Ok(vm.heap.allocate(HeapData::Dict(dict)))
+    }
+
     /// Element-wise equality against another dict (matching keys and values).
     ///
     /// Shared by `Dict::py_eq_impl` and `HostClass::py_eq_impl` (which compares
@@ -963,38 +1015,13 @@ impl<'h> HeapRead<'h, Dict> {
         defer_drop!(iter, vm);
         let mut iter = iter.read(vm);
 
+        let mut index = 0;
         while let Some(item) = iter.py_next(vm)? {
-            let pair_iter = item.into_py_iter(vm)?;
-            defer_drop!(pair_iter, vm);
-            let mut pair_iter = pair_iter.read(vm);
-
-            let Some(key) = pair_iter.py_next(vm)? else {
-                return Err(ExcType::type_error(
-                    "dictionary update sequence element has length 0; 2 is required",
-                ));
-            };
-            let mut key_guard = DropGuard::new(key, vm);
-
-            let Some(value) = pair_iter.py_next(key_guard.ctx())? else {
-                return Err(ExcType::type_error(
-                    "dictionary update sequence element has length 1; 2 is required",
-                ));
-            };
-            let mut value_guard = DropGuard::new(value, key_guard.ctx());
-
-            if let Some(extra) = pair_iter.py_next(value_guard.ctx())? {
-                extra.drop_with(value_guard.ctx());
-                return Err(ExcType::type_error(
-                    "dictionary update sequence element has length > 2; 2 is required",
-                ));
-            }
-
-            let value = value_guard.into_inner();
-            let key = key_guard.into_inner();
-
+            let (key, value) = unpack_update_pair(item, index, vm)?;
             if let Some(old_value) = self.set(key, value, vm)? {
                 old_value.drop_with(vm);
             }
+            index += 1;
         }
 
         Ok(())
@@ -1301,19 +1328,26 @@ impl<'h> HeapRead<'h, Dict> {
     ///
     /// Preflights the slot bytes so an over-budget clone raises a graceful
     /// `MemoryError` instead of bursting past the allocator's hard limit.
+    /// Polls the clock as it goes: this is one half of a dict copy and the
+    /// fill half already polls, so leaving it out let a wide dict outrun
+    /// `max_duration` by however long the snapshot took.
     pub(crate) fn clone_all_pairs(&self, vm: &mut VM<'h>) -> RunResult<Vec<(Value, Value)>> {
         let len = self.get(vm.heap).len();
         vm.heap.tracker.check_allocation(len.saturating_mul(2 * VALUE_SIZE))?;
-        let mut pairs = Vec::with_capacity(len);
+        // Guarded because the poll below can end the snapshot with clones
+        // already taken, which a plain `Vec` would drop without releasing.
+        let mut guard = DropGuard::new(Vec::with_capacity(len), vm);
         // No user code runs during the snapshot, so `len` stays current and
         // the `expect`s cannot fire.
         for i in 0..len {
+            let (pairs, vm) = guard.as_parts_mut();
+            vm.heap.tracker.check_time_every(i)?;
             let dict = self.get(vm.heap);
             let key = dict.key_at(i).expect("index in range").clone_with_heap(vm.heap);
             let value = dict.value_at(i).expect("index in range").clone_with_heap(vm.heap);
             pairs.push((key, value));
         }
-        Ok(pairs)
+        Ok(guard.into_inner())
     }
 
     /// Handles dict attribute assignment. Only `defaultdict.default_factory` is
@@ -1440,8 +1474,14 @@ impl<'h> PyTrait<'h> for HeapObjectRead<'h, Dict> {
         self.counter_binary(other, CounterOp::And, vm)
     }
 
+    /// `Counter | Counter` is the multiset union; any other pair of dicts
+    /// merges (PEP 584), and a non-dict on the right is left to the caller's
+    /// `TypeError`.
     fn py_or_impl(&self, other: &Value, vm: &mut VM<'h>) -> RunResult<Option<Value>> {
-        self.counter_binary(other, CounterOp::Or, vm)
+        match self.counter_binary(other, CounterOp::Or, vm)? {
+            Some(union) => Ok(Some(union)),
+            None => dict_or(self, other, vm),
+        }
     }
 
     fn py_iadd_impl(&mut self, other: &Value, vm: &mut VM<'h>) -> RunResult<bool> {
@@ -1456,8 +1496,14 @@ impl<'h> PyTrait<'h> for HeapObjectRead<'h, Dict> {
         self.counter_inplace(other, CounterOp::And, vm)
     }
 
+    /// `d |= other` is `d.update(other)` for a plain dict or defaultdict, so
+    /// it accepts any mapping or iterable of pairs; a Counter keeps its
+    /// multiset union.
     fn py_ior_impl(&mut self, other: &Value, vm: &mut VM<'h>) -> RunResult<bool> {
-        self.counter_inplace(other, CounterOp::Or, vm)
+        if !self.counter_inplace(other, CounterOp::Or, vm)? {
+            self.merge_from_value(other.clone_with_heap(vm), vm)?;
+        }
+        Ok(true)
     }
 
     fn py_repr_fmt(&self, f: &mut impl Write, vm: &mut VM<'h>, heap_ids: &mut LazyHeapSet) -> RunResult<()> {
@@ -1778,6 +1824,44 @@ fn dict_copy<'h>(dict: &mut HeapRead<'h, Dict>, vm: &mut VM<'h>) -> RunResult<Va
     Ok(Value::Ref(heap_id))
 }
 
+/// `left | right` for two dicts: a new dict of `left`'s pairs updated with
+/// `right`'s, or `None` when `right` is not a dict.
+///
+/// A defaultdict on either side wins the result's kind (its `__or__` and
+/// `__ror__` both build a defaultdict with its own factory, the left one
+/// first); otherwise the result is a plain dict, as `PyDict_Copy` of a
+/// Counter is, so `Counter | dict` and `dict | Counter` are plain dicts.
+fn dict_or<'h>(left: &HeapRead<'h, Dict>, right: &Value, vm: &mut VM<'h>) -> RunResult<Option<Value>> {
+    let Some(HeapReadOutput::Dict(right_dict)) = right.read_heap(vm) else {
+        return Ok(None);
+    };
+    // `from_pairs` builds a fresh dict of exactly these pairs while the snapshot
+    // is still live, so charge both: copying a near-limit dict must raise
+    // `MemoryError` rather than jump past the allocator's hard ceiling. The
+    // growth term is exact here only because the destination starts empty.
+    let left_len = left.get(vm.heap).len();
+    vm.heap.tracker.check_allocation(
+        left_len.saturating_mul(2 * VALUE_SIZE + mem::size_of::<DictEntry>() + mem::size_of::<usize>()),
+    )?;
+    let pairs = left.clone_all_pairs(vm)?;
+    let merged = Dict::from_pairs(pairs, vm)?;
+    let mut merged_guard = DropGuard::new(merged, vm);
+    let (merged, vm) = merged_guard.as_parts_mut();
+    dict_merge_from_value(merged, right.clone_with_heap(vm), vm)?;
+    let (mut merged, vm) = merged_guard.into_parts();
+    // Cloned after the merge, the only step that can fail, so the factory
+    // reference a defaultdict kind holds needs no guard of its own.
+    let kind = if left.get(vm.heap).is_defaultdict() {
+        left.get(vm.heap).cloned_kind(vm.heap)
+    } else if right_dict.get(vm.heap).is_defaultdict() {
+        right_dict.get(vm.heap).cloned_kind(vm.heap)
+    } else {
+        DictKind::plain()
+    };
+    merged.set_kind(kind);
+    Ok(Some(Value::Ref(vm.heap.allocate(HeapData::Dict(merged)))))
+}
+
 /// Implements Python's `dict.update([other], **kwargs)` method.
 ///
 /// Updates the dict with key-value pairs from `other` and/or `kwargs`.
@@ -1823,14 +1907,22 @@ fn dict_merge_from_value(dict: &mut Dict, other_value: Value, vm: &mut VM<'_>) -
         if let Value::Ref(id) = other_value
             && let HeapData::Dict(src_dict) = vm.heap.get(*id)
         {
+            // The snapshot stays live while the pairs are applied, so charge it
+            // up front. Only the snapshot: how much the target grows depends on
+            // how many of these keys it already holds, and charging for all of
+            // them refuses merges that would have fit (`a | b` over shared keys).
+            check_pair_snapshot(src_dict.len(), vm)?;
             // Clone key-value pairs from the source dict.
             let pairs: Vec<(Value, Value)> = src_dict
                 .iter()
                 .map(|(k, v)| (k.clone_with_heap(vm), v.clone_with_heap(vm)))
                 .collect();
 
-            // Apply pairs into the target dict.
-            for (key, value) in pairs {
+            // Apply pairs into the target dict. A key whose `__hash__` raises
+            // fails `set` midway, so the guard releases the pairs not yet applied.
+            let pairs_iter = pairs.into_iter();
+            defer_drop_mut!(pairs_iter, vm);
+            for (key, value) in pairs_iter {
                 let old_value = dict.set(key, value, vm)?;
                 old_value.drop_with(vm);
             }
@@ -1843,51 +1935,71 @@ fn dict_merge_from_value(dict: &mut Dict, other_value: Value, vm: &mut VM<'_>) -
     dict_merge_from_iterable_pairs(dict, other_value, vm)
 }
 
+/// Preflights the `(key, value)` snapshot a dict-to-dict merge copies out.
+///
+/// The snapshot is a known-size bulk allocation made inside one builtin call
+/// with no instruction checkpoint, so it is refused here rather than after the
+/// fact. The target's own growth is left to the ordinary checkpoints, being
+/// unknowable until the keys are compared.
+fn check_pair_snapshot(len: usize, vm: &VM<'_>) -> RunResult<()> {
+    Ok(vm.heap.tracker.check_allocation(len.saturating_mul(2 * VALUE_SIZE))?)
+}
+
 /// Merges key-value pairs from an iterable of 2-item iterables.
 ///
-/// Each item from `iterable` is treated as `(key, value)`. Items with length 0, 1,
-/// or greater than 2 raise the same TypeError messages used by `dict.update()`.
+/// Each item from `iterable` is treated as `(key, value)`; see
+/// [`unpack_update_pair`] for the errors a malformed item raises.
 fn dict_merge_from_iterable_pairs(dict: &mut Dict, iterable: Value, vm: &mut VM<'_>) -> RunResult<()> {
     let iter = iterable.into_py_iter(vm)?;
     defer_drop!(iter, vm);
     let mut iter = iter.read(vm);
 
+    let mut index = 0;
     while let Some(item) = iter.py_next(vm)? {
-        // Each item should be a pair (iterable of 2 elements).
-        let pair_iter = item.into_py_iter(vm)?;
-        defer_drop!(pair_iter, vm);
-        let mut pair_iter = pair_iter.read(vm);
-
-        let Some(key) = pair_iter.py_next(vm)? else {
-            return Err(ExcType::type_error(
-                "dictionary update sequence element has length 0; 2 is required",
-            ));
-        };
-        let mut key_guard = DropGuard::new(key, vm);
-
-        let Some(value) = pair_iter.py_next(key_guard.ctx())? else {
-            return Err(ExcType::type_error(
-                "dictionary update sequence element has length 1; 2 is required",
-            ));
-        };
-        let mut value_guard = DropGuard::new(value, key_guard.ctx());
-
-        if let Some(extra) = pair_iter.py_next(value_guard.ctx())? {
-            extra.drop_with(value_guard.ctx());
-            return Err(ExcType::type_error(
-                "dictionary update sequence element has length > 2; 2 is required",
-            ));
-        }
-
-        let value = value_guard.into_inner();
-        let key = key_guard.into_inner();
-
+        let (key, value) = unpack_update_pair(item, index, vm)?;
         if let Some(old_value) = dict.set(key, value, vm)? {
             old_value.drop_with(vm);
         }
+        index += 1;
     }
 
     Ok(())
+}
+
+/// Splits the `index`th item of a `dict.update()` sequence into its key and
+/// value, taking ownership of `item`.
+///
+/// An item of the wrong length raises CPython's `ValueError`, which names
+/// the element's full length: an over-long item is drained to count it,
+/// polling the time limit as it goes.
+fn unpack_update_pair(item: Value, index: usize, vm: &mut VM<'_>) -> RunResult<(Value, Value)> {
+    let pair_iter = item.into_py_iter(vm)?;
+    defer_drop!(pair_iter, vm);
+    let mut pair_iter = pair_iter.read(vm);
+
+    let Some(key) = pair_iter.py_next(vm)? else {
+        return Err(ExcType::value_error_update_sequence_length(index, 0));
+    };
+    let mut key_guard = DropGuard::new(key, vm);
+
+    let Some(value) = pair_iter.py_next(key_guard.ctx())? else {
+        return Err(ExcType::value_error_update_sequence_length(index, 1));
+    };
+    let mut value_guard = DropGuard::new(value, key_guard.ctx());
+
+    let mut length = 2;
+    while let Some(extra) = pair_iter.py_next(value_guard.ctx())? {
+        extra.drop_with(value_guard.ctx());
+        length += 1;
+        value_guard.ctx().heap.tracker.check_memory_time_every(length)?;
+    }
+    if length != 2 {
+        return Err(ExcType::value_error_update_sequence_length(index, length));
+    }
+
+    let value = value_guard.into_inner();
+    let key = key_guard.into_inner();
+    Ok((key, value))
 }
 
 /// Merges keyword arguments into a dict.
@@ -2224,3 +2336,44 @@ impl_dict_iterator!(
         ))
     }
 );
+
+impl<'h> PyDeepCopy<'h> for HeapRead<'h, Dict> {
+    /// Copies a dict, keys included, keeping its `defaultdict` / `Counter` flavour.
+    #[inline(never)]
+    fn py_deep_copy(&self, source: &Value, memo: &mut Memo, vm: &mut VM<'h>) -> RunResult<Value> {
+        let copy_id = self.allocate_empty_deep_copy(memo, vm)?;
+        let mut guard = DropGuard::new(Value::Ref(copy_id), vm);
+        let (copy, vm) = guard.as_parts_mut();
+        memo.insert(source, copy, vm)?;
+        let expected_len = self.get(vm.heap).len();
+        // The copy ends up the same width as the source — the guard below
+        // rejects a mid-walk resize rather than following it — so the whole
+        // destination table is preflighted here, as `py_iadd` preflights the
+        // growth it is about to cause.
+        vm.heap
+            .tracker
+            .check_allocation(expected_len.saturating_mul(2 * VALUE_SIZE))?;
+        for index in 0.. {
+            let (_, vm) = guard.as_parts_mut();
+            vm.heap.tracker.check_time_every(index)?;
+            // Copying a pair runs Python, which can resize the source; CPython's
+            // `for key, value in x.items()` raises this same error.
+            if self.get(vm.heap).len() != expected_len {
+                return Err(ExcType::runtime_error_dict_changed_size());
+            }
+            let Some((key, value)) = clone_pair(self.get(vm.heap), index, vm) else {
+                break;
+            };
+            let (key_copy, value_copy) = deep_copy_pair(key, value, memo, vm)?;
+            let HeapReadOutput::Dict(mut dest) = vm.heap.read(copy_id) else {
+                unreachable!("copy was allocated as a dict")
+            };
+            // `set` takes ownership of the pair and releases it on failure.
+            if let Some(replaced) = dest.set(key_copy, value_copy, vm)? {
+                replaced.drop_with(vm);
+            }
+        }
+        let (copy, _) = guard.into_parts();
+        Ok(copy)
+    }
+}

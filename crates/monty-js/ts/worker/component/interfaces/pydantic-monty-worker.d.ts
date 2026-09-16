@@ -290,16 +290,11 @@ export interface ConfigureRequest {
   typeCheckColor: boolean
   printFlushIntervalMs?: number
 }
-export interface HostModuleSource {
-  name: string
-  filename: string
-  source: string
-}
 export interface FeedRequest {
   code: string
   inputs: Array<NamedValue>
   skipTypeCheck: boolean
-  hostModules: Array<HostModuleSource>
+  cwd: string
 }
 export interface RaisedError {
   excType: string
@@ -421,6 +416,7 @@ export interface FunctionCallEvent {
   kwargs: Array<ValuePair>
   callId: number
   objectId?: string
+  allowEagerAwait: boolean
 }
 export interface NameLookupEvent {
   name: string
