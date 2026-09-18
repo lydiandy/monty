@@ -6,7 +6,7 @@
 
 use std::mem;
 
-use monty_types::{MontyUuid, OsFunctionCall};
+use monty_types::{HostClock, InvalidInputError, MontyUuid, OsFunctionCall};
 
 use super::{CallFrame, VM, attr::PendingLookupEffect, recursion::RunReentryGuard};
 use crate::{
@@ -15,7 +15,8 @@ use crate::{
     builtins::{Builtins, BuiltinsFunctions, BuiltinsFunctionsExt},
     bytecode::FrameExit,
     defer_drop,
-    exception_private::{ExcType, ExcTypeExt, RunError},
+    exception_private::{ExcType, ExcTypeExt, RunError, SimpleException},
+    object_bridge::MontyObjectExt,
     function::{ExactPositionalCall, Function},
     heap::{ContainsHeap, DropGuard, DropWithContext, HeapData, HeapId, HeapReadOutput},
     heap_data::CellValue,
@@ -429,6 +430,24 @@ impl VM<'_> {
             CallResult::AttrLookup {
                 effect: Some(effect), ..
             } => Ok(effect.apply(None, this)),
+            // Embed sync path has no OS host loop; answer clock calls in-process
+            // (same as Executor::resolve_clock_call) so `datetime.now()` works.
+            CallResult::OsCall(function_call) => {
+                match HostClock::System.resolve(&function_call) {
+                    Some(obj) => {
+                        function_call.drop_with(this);
+                        obj.to_value(this).map_err(|e| match e {
+                            InvalidInputError::Resource(err) => RunError::from(err),
+                            other @ InvalidInputError::InvalidType(_) => SimpleException::new(
+                                ExcType::RuntimeError,
+                                Some(format!("invalid return type: {other}")),
+                            )
+                            .into(),
+                        })
+                    }
+                    None => Err(this.unsupported_call_result(ctx, CallResult::OsCall(function_call))),
+                }
+            }
             CallResult::FramePushed => {
                 // A new frame was pushed for a defined function call - we need to run it
                 // to completion.
@@ -445,6 +464,42 @@ impl VM<'_> {
                             let value = effect.apply(None, this);
                             this.push(value);
                         }
+                        FrameExit::OsCall {
+                            function_call,
+                            call_id,
+                            effect: None,
+                        } => match HostClock::System.resolve(&function_call) {
+                            Some(obj) => {
+                                function_call.drop_with(this);
+                                match this.resume(obj)? {
+                                    FrameExit::Return(v) => return Ok(v),
+                                    FrameExit::AttrLookup {
+                                        effect: Some(effect),
+                                        ..
+                                    } => {
+                                        let value = effect.apply(None, this);
+                                        this.push(value);
+                                    }
+                                    exit => {
+                                        let error = this.unsupported_frame_exit(ctx, exit);
+                                        if let Some(error) = this.handle_exception(error) {
+                                            return Err(error);
+                                        }
+                                    }
+                                }
+                            }
+                            None => {
+                                let exit = FrameExit::OsCall {
+                                    function_call,
+                                    call_id,
+                                    effect: None,
+                                };
+                                let error = this.unsupported_frame_exit(ctx, exit);
+                                if let Some(error) = this.handle_exception(error) {
+                                    return Err(error);
+                                }
+                            }
+                        },
                         exit => {
                             // Raise unsupported suspensions inside the callee so its
                             // exception handlers can observe them.

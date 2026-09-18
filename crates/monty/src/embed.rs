@@ -347,6 +347,11 @@ pub trait HostCtx {
     fn mark_view_class(&mut self, _class: HeapId) -> Result<(), String> {
         Err("this host cannot mark @view".into())
     }
+
+    /// Call a Python callable with host args (Pending.then / host callbacks)
+    fn call_callable(&mut self, _callable: HeapId, _args: Vec<HostValue>) -> Result<HostValue, String> {
+        Err("this host cannot call callables".into())
+    }
 }
 
 /// Embedder callbacks for `HostObject` methods and StandardLib constructors.
@@ -1048,6 +1053,19 @@ impl HostCtx for VmHostCtx<'_, '_> {
                 .map_err(|error| format!("{error:?}")),
             _ => Err("@view expects a class".into()),
         }
+    }
+
+    fn call_callable(&mut self, callable: HeapId, args: Vec<HostValue>) -> Result<HostValue, String> {
+        self.vm.heap.inc_ref(callable);
+        let boxed_module = boxed_module_function(self.vm, callable);
+        let func = boxed_module.unwrap_or(Value::Ref(callable));
+        let arg_values = host_values_to_args(self.vm, args).map_err(|e| e.to_string())?;
+        let result = self
+            .vm
+            .evaluate_function("<callback>", &func, arg_values)
+            .map_err(|e| e.into_python_exception(self.vm.interns, |_| Some("")).to_string())?;
+        Value::Ref(callable).drop_with(self.vm);
+        value_to_host(self.vm, result).map_err(|e| format!("{e:?}"))
     }
 }
 
