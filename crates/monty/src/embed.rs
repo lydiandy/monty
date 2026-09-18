@@ -15,7 +15,7 @@ pub use crate::host_modules::HostModuleSource;
 use crate::{
     args::{ArgValues, KwargsValues},
     bytecode::{CallResult, VM},
-    exception_private::{ExcType, RunError, RunResult, SimpleException},
+    exception_private::{ExcType, ExcTypeExt, RunError, RunResult, SimpleException},
     heap::{Heap, HeapData, HeapId, HeapObjectRead, HeapReader},
     heap_data::FunctionDefaults,
     modules::ModuleFunctions,
@@ -386,6 +386,34 @@ pub trait HostVtable: 'static {
         _kwargs: Vec<(String, HostValue)>,
     ) -> Result<HostValue, String> {
         Err(format!("host object kind {} is not callable", obj.kind))
+    }
+
+    /// `iter(host_obj)` / `for x in host_obj`
+    fn iter(
+        &mut self,
+        _ctx: &mut dyn HostCtx,
+        _id: HeapId,
+        obj: HostObject,
+    ) -> Result<HostValue, String> {
+        Err(format!("host object kind {} is not iterable", obj.kind))
+    }
+
+    /// `next(host_obj)`，`None` 表示停
+    fn next(
+        &mut self,
+        _ctx: &mut dyn HostCtx,
+        _id: HeapId,
+        obj: HostObject,
+    ) -> Result<Option<HostValue>, String> {
+        Err(format!("host object kind {} is not an iterator", obj.kind))
+    }
+
+    fn is_iterable(&self, _obj: HostObject) -> bool {
+        false
+    }
+
+    fn is_iterator(&self, _obj: HostObject) -> bool {
+        false
     }
 
     /// A call the host wants the VM to run *after* `call_attr` returns.
@@ -846,6 +874,32 @@ pub(crate) fn dispatch_call(vm: &mut VM<'_>, id: HeapId, obj: HostObject, args: 
     Ok(CallResult::Value(value))
 }
 
+pub(crate) fn dispatch_iter(vm: &mut VM<'_>, id: HeapId, obj: HostObject) -> RunResult<Value> {
+    let host = vm
+        .heap
+        .host()
+        .ok_or_else(|| SimpleException::new_msg(ExcType::RuntimeError, "no embedder host attached to the heap"))?;
+    let mut ctx = VmHostCtx { vm };
+    let result = host
+        .borrow_mut()
+        .iter(&mut ctx, id, obj)
+        .map_err(|msg| SimpleException::new_msg(ExcType::RuntimeError, msg))?;
+    Ok(host_value_to_value(ctx.vm, result))
+}
+
+pub(crate) fn dispatch_next(vm: &mut VM<'_>, id: HeapId, obj: HostObject) -> RunResult<Option<Value>> {
+    let host = vm
+        .heap
+        .host()
+        .ok_or_else(|| SimpleException::new_msg(ExcType::RuntimeError, "no embedder host attached to the heap"))?;
+    let mut ctx = VmHostCtx { vm };
+    let result = host
+        .borrow_mut()
+        .next(&mut ctx, id, obj)
+        .map_err(|msg| SimpleException::new_msg(ExcType::RuntimeError, msg))?;
+    Ok(result.map(|value| host_value_to_value(ctx.vm, value)))
+}
+
 pub(crate) fn dispatch_create_native_module(vm: &mut VM<'_>, name: &str) -> RunResult<Option<HeapId>> {
     let Some(host) = vm.heap.host() else {
         return Ok(None);
@@ -1182,6 +1236,48 @@ impl<'h> PyTrait<'h> for HeapObjectRead<'h, HostObject> {
         let id = self.id();
         let obj = *self.get(vm.heap);
         dispatch_getattr(vm, id, obj, attr.as_str(vm.interns))
+    }
+
+    fn py_is_iterable(&self, vm: &VM<'h>) -> bool {
+        let obj = *self.get(vm.heap);
+        match vm.heap.host() {
+            Some(host) => host.try_borrow().map(|host| host.is_iterable(obj)).unwrap_or(false),
+            None => false,
+        }
+    }
+
+    fn py_is_iterator(&self, vm: &VM<'h>) -> bool {
+        let obj = *self.get(vm.heap);
+        match vm.heap.host() {
+            Some(host) => host.try_borrow().map(|host| host.is_iterator(obj)).unwrap_or(false),
+            None => false,
+        }
+    }
+
+    fn py_iter(&self, vm: &mut VM<'h>) -> RunResult<Value> {
+        let id = self.id();
+        let obj = *self.get(vm.heap);
+        let iterable = match vm.heap.host() {
+            Some(host) => host.try_borrow().map(|host| host.is_iterable(obj)).unwrap_or(false),
+            None => false,
+        };
+        if !iterable {
+            return Err(ExcType::type_error_not_iterable(&self.py_type_name(vm)));
+        }
+        dispatch_iter(vm, id, obj)
+    }
+
+    fn py_next(&mut self, vm: &mut VM<'h>) -> RunResult<Option<Value>> {
+        let id = self.id();
+        let obj = *self.get(vm.heap);
+        let iterator = match vm.heap.host() {
+            Some(host) => host.try_borrow().map(|host| host.is_iterator(obj)).unwrap_or(false),
+            None => false,
+        };
+        if !iterator {
+            return Err(ExcType::type_error_not_iterator(&self.py_type_name(vm)));
+        }
+        dispatch_next(vm, id, obj)
     }
 
     fn py_eq_impl(&self, other: &Value, vm: &mut VM<'h>) -> RunResult<Option<bool>> {

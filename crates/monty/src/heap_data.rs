@@ -705,6 +705,7 @@ impl<'h> PyTrait<'h> for HeapReadOutput<'h> {
         match self {
             // A user-defined class is an iterator only if it defines `__next__`.
             Self::Instance(inst) => inst.py_is_iterator(vm),
+            Self::HostObject(obj) => obj.py_is_iterator(vm),
             // Every built-in iterator is identified by its type, so there is no
             // list to keep in step with new iterator types here.
             other => other.py_type(vm).is_iterator(),
@@ -1014,6 +1015,7 @@ impl<'h> PyTrait<'h> for HeapReadOutput<'h> {
             Self::Time(value) => value.py_iter(vm),
             Self::TimeDelta(value) => value.py_iter(vm),
             Self::TimeZone(value) => value.py_iter(vm),
+            Self::HostObject(value) => value.py_iter(vm),
             Self::NamedTupleClass(_)
             | Self::Closure(_)
             | Self::FunctionDefaults(_)
@@ -1028,8 +1030,7 @@ impl<'h> PyTrait<'h> for HeapReadOutput<'h> {
             | Self::Module(_)
             | Self::Coroutine(_)
             | Self::GatherFuture(_)
-            | Self::ExternalFuture(_)
-            | Self::HostObject(_) => Err(ExcType::type_error_not_iterable(&self.py_type_name(vm))),
+            | Self::ExternalFuture(_) => Err(ExcType::type_error_not_iterable(&self.py_type_name(vm))),
         }
     }
 
@@ -1076,6 +1077,7 @@ impl<'h> PyTrait<'h> for HeapReadOutput<'h> {
             Self::Time(value) => value.py_next(vm),
             Self::TimeDelta(value) => value.py_next(vm),
             Self::TimeZone(value) => value.py_next(vm),
+            Self::HostObject(value) => value.py_next(vm),
             other => Err(ExcType::type_error_not_iterator(&other.py_type_name(vm))),
         }
     }
