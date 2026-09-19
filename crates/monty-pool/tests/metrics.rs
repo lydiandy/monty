@@ -448,7 +448,8 @@ async fn raw_turns_are_instrumented_like_typed_ones() {
             inputs: vec![],
             skip_type_check: false,
             cwd: "/".to_owned(),
-        })),
+        
+            host_modules: Vec::new(),})),
         ..pb::ParentRequest::default()
     };
     let event = checkout.turn_raw(&feed, &mut on_event).await.expect("raw feed");

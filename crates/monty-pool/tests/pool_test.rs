@@ -1660,7 +1660,8 @@ async fn a_subprocess_shutdown_dump_is_refused_on_the_raw_path() {
             inputs: vec![],
             skip_type_check: false,
             cwd: "/".to_owned(),
-        })),
+        
+            host_modules: Vec::new(),})),
         ..pb::ParentRequest::default()
     };
     let mut on_event = |_: &pb::ChildEvent| Box::pin(ready(())) as PrintFuture;
@@ -1703,7 +1704,8 @@ async fn an_event_with_no_kind_is_refused_on_the_raw_path() {
             inputs: vec![],
             skip_type_check: false,
             cwd: "/".to_owned(),
-        })),
+        
+            host_modules: Vec::new(),})),
         ..pb::ParentRequest::default()
     };
     let mut on_event = |_: &pb::ChildEvent| Box::pin(ready(())) as PrintFuture;
@@ -1750,7 +1752,8 @@ async fn a_fatal_error_on_the_raw_path_discards_the_worker() {
             inputs: vec![],
             skip_type_check: false,
             cwd: "/".to_owned(),
-        })),
+        
+            host_modules: Vec::new(),})),
         ..pb::ParentRequest::default()
     };
     let mut on_event = |_: &pb::ChildEvent| Box::pin(ready(())) as PrintFuture;

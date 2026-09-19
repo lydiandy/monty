@@ -119,7 +119,8 @@ impl ChildProc {
             inputs,
             skip_type_check: false,
             cwd: "/".to_owned(),
-        }));
+        
+            host_modules: Vec::new(),}));
         self.recv_turn()
     }
 
@@ -151,7 +152,8 @@ impl ChildProc {
             inputs: vec![],
             skip_type_check: false,
             cwd: "/".to_owned(),
-        }));
+        
+            host_modules: Vec::new(),}));
         self.expect_death();
     }
 
@@ -1889,7 +1891,8 @@ fn killed_child_is_detected_as_eof() {
         inputs: vec![],
         skip_type_check: false,
         cwd: "/".to_owned(),
-    }));
+    
+        host_modules: Vec::new(),}));
     thread::sleep(Duration::from_millis(200));
     child.child.kill().expect("kill");
 

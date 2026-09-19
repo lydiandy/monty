@@ -1081,7 +1081,8 @@ mod tests {
             inputs: vec![],
             skip_type_check: false,
             cwd: "/".to_owned(),
-        }))
+        
+            host_modules: Vec::new(),}))
     }
 
     fn call_event(function_name: &str) -> pb::ChildEvent {

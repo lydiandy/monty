@@ -24,7 +24,8 @@ fn feed() -> pb::ParentRequest {
             inputs: vec![],
             skip_type_check: false,
             cwd: "/".to_owned(),
-        })),
+        
+            host_modules: Vec::new(),})),
         trace_parent: None,
     }
 }

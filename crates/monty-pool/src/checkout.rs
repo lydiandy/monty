@@ -685,6 +685,7 @@ impl Checkout {
                 .collect(),
             skip_type_check,
             cwd,
+            host_modules: Vec::new(),
         }));
         let outcome = self.expect_turn(&request, on_print).await;
         // The worker adopts the directory after type checking and before it

@@ -504,6 +504,15 @@ pub struct Configure {
 }
 /// Executes one snippet against the session. Turn ends with `Complete`,
 /// `Error`, `TypingError`, or a suspension event.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct HostModuleSource {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub filename: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub source: ::prost::alloc::string::String,
+}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Feed {
     #[prost(string, tag = "1")]
@@ -518,6 +527,8 @@ pub struct Feed {
     /// the session's first feed). Empty keeps the session's current directory.
     #[prost(string, tag = "4")]
     pub cwd: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "5")]
+    pub host_modules: ::prost::alloc::vec::Vec<HostModuleSource>,
 }
 /// Ends a pending suspension by raising `exception` uncatchably at its site.
 /// The session returns ready in an `Error` event. Hosts use this to stop a feed,

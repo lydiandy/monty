@@ -30,7 +30,8 @@ fn start_external_call(child: &mut Child, code: &str) -> WireFunctionCall {
         }],
         skip_type_check: false,
         cwd: "/".to_owned(),
-    }));
+    
+        host_modules: Vec::new(),}));
     let (bytes, _) = dispatch_frame(child, &request);
     let (_, event) = split_turn(&bytes);
     let pb::child_event::Kind::FunctionCall(call) = event else {
@@ -219,7 +220,8 @@ fn feed(child: &mut Child, code: &str) -> (Vec<pb::Print>, pb::child_event::Kind
         inputs: vec![],
         skip_type_check: false,
         cwd: "/".to_owned(),
-    }));
+    
+        host_modules: Vec::new(),}));
     let (bytes, outcome) = dispatch_frame(child, &request);
     assert_eq!(outcome, HandleOutcome::Continue);
     split_turn(&bytes)
@@ -365,7 +367,8 @@ fn inputs_are_injected() {
         }],
         skip_type_check: false,
         cwd: "/".to_owned(),
-    }));
+    
+        host_modules: Vec::new(),}));
     let (bytes, outcome) = dispatch_frame(&mut child, &request);
     assert_eq!(outcome, HandleOutcome::Continue);
     let (_, event) = split_turn(&bytes);
@@ -562,7 +565,8 @@ fn turn_events_carry_the_suspension_budget() {
         inputs: vec![],
         skip_type_check: false,
         cwd: "/".to_owned(),
-    }));
+    
+        host_modules: Vec::new(),}));
     let (bytes, _) = dispatch_frame(&mut child, &request);
     let events = decode_full_events(&bytes);
     assert_eq!(events.len(), 1);

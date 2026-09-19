@@ -605,7 +605,8 @@ async fn duration_backstop_arms_on_the_raw_path() {
             inputs: vec![],
             skip_type_check: false,
             cwd: "/".to_owned(),
-        })),
+        
+            host_modules: Vec::new(),})),
         ..pb::ParentRequest::default()
     };
     let mut on_event = |_: &pb::ChildEvent| Box::pin(ready(())) as PrintFuture;
@@ -668,7 +669,8 @@ async fn a_raw_load_adopts_the_dumps_duration_budget() {
             inputs: vec![],
             skip_type_check: false,
             cwd: "/".to_owned(),
-        })),
+        
+            host_modules: Vec::new(),})),
         ..pb::ParentRequest::default()
     };
     let err = checkout.turn_raw(&feed, &mut on_event).await.unwrap_err();
@@ -728,7 +730,8 @@ async fn lifecycle_requests_are_refused_on_the_raw_path() {
             inputs: vec![],
             skip_type_check: false,
             cwd: "/".to_owned(),
-        })),
+        
+            host_modules: Vec::new(),})),
         ..pb::ParentRequest::default()
     };
     let event = checkout.turn_raw(&feed, &mut on_event).await.expect("feed");
@@ -783,7 +786,8 @@ async fn an_oversize_raw_load_keeps_the_duration_budget() {
             inputs: vec![],
             skip_type_check: false,
             cwd: "/".to_owned(),
-        })),
+        
+            host_modules: Vec::new(),})),
         ..pb::ParentRequest::default()
     };
     let err = checkout.turn_raw(&feed, &mut on_event).await.unwrap_err();
@@ -826,7 +830,8 @@ async fn a_shutdown_dump_on_the_raw_path_discards_the_worker() {
             inputs: vec![],
             skip_type_check: false,
             cwd: "/".to_owned(),
-        })),
+        
+            host_modules: Vec::new(),})),
         ..pb::ParentRequest::default()
     };
     let mut on_event = |_: &pb::ChildEvent| Box::pin(ready(())) as PrintFuture;
@@ -1141,7 +1146,8 @@ async fn suspension_limit_is_enforced_on_the_raw_path() {
             inputs: vec![],
             skip_type_check: false,
             cwd: "/".to_owned(),
-        })),
+        
+            host_modules: Vec::new(),})),
         ..pb::ParentRequest::default()
     };
     let event = checkout.turn_raw(&feed, &mut on_event).await.expect("feed");
@@ -1245,7 +1251,8 @@ async fn rejected_raw_load_keeps_the_suspension_count() {
             inputs: vec![],
             skip_type_check: false,
             cwd: "/".to_owned(),
-        })),
+        
+            host_modules: Vec::new(),})),
         ..pb::ParentRequest::default()
     };
     let event = checkout.turn_raw(&feed, &mut on_event).await.expect("feed");
@@ -1460,7 +1467,8 @@ async fn aborted_restored_suspension_keeps_the_dump_limit() {
             inputs: vec![],
             skip_type_check: false,
             cwd: "/".to_owned(),
-        })),
+        
+            host_modules: Vec::new(),})),
         ..pb::ParentRequest::default()
     };
     let event = checkout.turn_raw(&feed, &mut on_event).await.expect("aborted feed");

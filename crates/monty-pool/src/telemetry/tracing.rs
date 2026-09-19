@@ -1063,7 +1063,8 @@ mod tests {
             inputs: vec![],
             skip_type_check: false,
             cwd: "/".to_owned(),
-        })));
+        
+            host_modules: Vec::new(),})));
         recorder.event(&event(pb::child_event::Kind::FunctionCall(WireFunctionCall {
             function_name: "double".to_owned(),
             args: vec![MontyObject::Int(2)],
@@ -1233,7 +1234,8 @@ mod tests {
             inputs: vec![],
             skip_type_check: false,
             cwd: "/".to_owned(),
-        })));
+        
+            host_modules: Vec::new(),})));
         recorder.event(&event(pb::child_event::Kind::Complete(pb::Complete {
             value: Some(MontyObject::Int(1).into()),
         })));
