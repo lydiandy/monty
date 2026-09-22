@@ -7,7 +7,7 @@
 //! Host types stay out of this crate: one [`HostObject`] payload plus a
 //! [`HostVtable`] implemented by the embedder.
 
-use std::{cell::RefCell, mem, rc::Rc};
+use std::{cell::RefCell, mem, rc::Rc, sync::Arc};
 
 use monty_types::{CompileOptions, MontyException, PrintWriter, ResourceTracker};
 
@@ -19,7 +19,7 @@ use crate::{
     heap::{Heap, HeapData, HeapId, HeapObjectRead, HeapReader},
     heap_data::FunctionDefaults,
     modules::ModuleFunctions,
-    run::Executor,
+    run::{Executor, Program},
     types::{Bytes, Dict, Instance, List, Module, PyTrait, Type, allocate_string},
     value::{EitherStr, Value},
 };
@@ -394,22 +394,12 @@ pub trait HostVtable: 'static {
     }
 
     /// `iter(host_obj)` / `for x in host_obj`
-    fn iter(
-        &mut self,
-        _ctx: &mut dyn HostCtx,
-        _id: HeapId,
-        obj: HostObject,
-    ) -> Result<HostValue, String> {
+    fn iter(&mut self, _ctx: &mut dyn HostCtx, _id: HeapId, obj: HostObject) -> Result<HostValue, String> {
         Err(format!("host object kind {} is not iterable", obj.kind))
     }
 
     /// `next(host_obj)`，`None` 表示停
-    fn next(
-        &mut self,
-        _ctx: &mut dyn HostCtx,
-        _id: HeapId,
-        obj: HostObject,
-    ) -> Result<Option<HostValue>, String> {
+    fn next(&mut self, _ctx: &mut dyn HostCtx, _id: HeapId, obj: HostObject) -> Result<Option<HostValue>, String> {
         Err(format!("host object kind {} is not an iterator", obj.kind))
     }
 
@@ -483,12 +473,14 @@ impl Embed {
     pub fn call_global(&mut self, name: &str, args: Vec<HostValue>) -> Result<HostValue, MontyException> {
         let name_id = self
             .executor
+            .tables
             .interns
             .get_string_id_by_name(name)
             .ok_or_else(|| MontyException::runtime_error(format!("no global {name}")))?;
         let slot = self
             .executor
-            .globals
+            .tables
+            .global_names
             .get(name_id)
             .ok_or_else(|| MontyException::runtime_error(format!("no global {name}")))?
             .index();
@@ -518,7 +510,7 @@ impl Embed {
             if imported.iter().any(|imported_id| imported_id == id) {
                 continue;
             }
-            if class_is_view(&self.heap, &self.executor.interns, *id) {
+            if class_is_view(&self.heap, &self.executor.tables.interns, *id) {
                 found.push(*id);
             }
         }
@@ -543,7 +535,7 @@ impl Embed {
                 let Value::Ref(id) = value else {
                     continue;
                 };
-                if class_is_view(&self.heap, &self.executor.interns, *id) {
+                if class_is_view(&self.heap, &self.executor.tables.interns, *id) {
                     out.push(*id);
                 }
             }
@@ -553,12 +545,12 @@ impl Embed {
 
     /// True when `id` is a class marked `@view`.
     pub fn is_view_class(&self, id: HeapId) -> bool {
-        class_is_view(&self.heap, &self.executor.interns, id)
+        class_is_view(&self.heap, &self.executor.tables.interns, id)
     }
 
     /// True when `receiver` is an instance whose class defines `name`.
     pub fn has_method(&self, receiver: HeapId, name: &str) -> bool {
-        instance_has_method(&self.heap, &self.executor.interns, receiver, name)
+        instance_has_method(&self.heap, &self.executor.tables.interns, receiver, name)
     }
 
     /// Allocate an instance of `class` without running user `__init__`.
@@ -645,7 +637,7 @@ impl Embed {
             Value::Bool(b) => HostValue::Bool(*b),
             Value::Int(i) => HostValue::Int(*i),
             Value::Float(f) => HostValue::Float(*f),
-            Value::InternString(id) => HostValue::Str(self.executor.interns.get_str(*id).to_owned()),
+            Value::InternString(id) => HostValue::Str(self.executor.tables.interns.get_str(*id).to_owned()),
             Value::Ref(id) => match self.heap.get(*id) {
                 HeapData::Str(s) => HostValue::Str(s.as_str().to_owned()),
                 _ => HostValue::Heap(*id),
@@ -683,21 +675,21 @@ impl Embed {
     /// Run the compiled module to completion (REPL-style branded executor borrow).
     fn run_module(&mut self) -> Result<(), MontyException> {
         let globals = mem::take(&mut self.globals);
-        let mut data = (&self.executor, None::<Vec<Value>>);
+        let mut data = (&mut self.executor, None::<Vec<Value>>);
         let result = HeapReader::with(&mut self.heap, &mut data, |reader, (executor, slot)| {
+            let host_modules = &executor.host_modules;
+            let source = Arc::clone(&executor.program.code);
             let mut vm = VM::new(
                 globals,
-                &executor.module_code,
+                &mut executor.tables,
+                &executor.program,
                 reader,
-                &executor.interns,
                 PrintWriter::Disabled,
-                executor.vm_env(),
             );
-            vm.set_host_modules(&executor.host_modules);
-            let result = executor
-                .run_to_completion(&mut vm)
+            vm.set_host_modules(host_modules);
+            let result = Program::run_to_completion(&mut vm)
                 .map(|_| ())
-                .map_err(|e| e.into_python_exception(&executor.interns, |_| Some(&*executor.code)));
+                .map_err(|e| e.into_python_exception(vm.interns, |_| Some(&*source)));
             *slot = Some(vm.take_globals());
             result
         });
@@ -710,17 +702,17 @@ impl Embed {
         f: impl for<'h> FnOnce(&mut VM<'h>) -> Result<R, MontyException>,
     ) -> Result<R, MontyException> {
         let globals = mem::take(&mut self.globals);
-        let mut data = (&self.executor, None::<Vec<Value>>);
+        let mut data = (&mut self.executor, None::<Vec<Value>>);
         let result = HeapReader::with(&mut self.heap, &mut data, |reader, (executor, slot)| {
-            let mut vm = VM::new_idle(
+            let host_modules = &executor.host_modules;
+            let mut vm = VM::new_parked(
                 globals,
-                &executor.module_code,
+                &mut executor.tables,
+                &executor.program,
                 reader,
-                &executor.interns,
                 PrintWriter::Disabled,
-                executor.vm_env(),
             );
-            vm.set_host_modules(&executor.host_modules);
+            vm.set_host_modules(host_modules);
             let result = f(&mut vm);
             *slot = Some(vm.take_globals());
             result
@@ -1023,7 +1015,10 @@ impl HostCtx for VmHostCtx<'_, '_> {
             .interns
             .get_string_id_by_name(name)
             .ok_or_else(|| format!("module name `{name}` is not interned"))?;
-        Ok(self.vm.heap.allocate(HeapData::Module(Box::new(Module::new(name_id)))))
+        Ok(self
+            .vm
+            .heap
+            .allocate(HeapData::Module(Box::new(Module::from_name_id(name_id)))))
     }
 
     fn module_set_attr(&mut self, module: HeapId, name: &str, value: HostValue) -> Result<(), String> {
@@ -1133,14 +1128,13 @@ fn value_to_host(vm: &mut VM<'_>, value: Value) -> RunResult<HostValue> {
         Value::InternString(id) => Ok(HostValue::Str(vm.interns.get_str(id).to_owned())),
         Value::InternBytes(id) => {
             let bytes = vm.interns.get_bytes(id).to_vec();
-            Ok(HostValue::Heap(
-                vm.heap.allocate(HeapData::Bytes(Bytes::new(bytes))),
-            ))
+            Ok(HostValue::Heap(vm.heap.allocate(HeapData::Bytes(Bytes::new(bytes)))))
         }
         Value::DefFunction(func_id) => {
             let id = vm.heap.allocate(HeapData::FunctionDefaults(FunctionDefaults {
                 func_id,
                 defaults: Vec::new(),
+                globals: None,
             }));
             Ok(HostValue::Heap(id))
         }
@@ -1237,6 +1231,12 @@ impl<'h> PyTrait<'h> for HeapObjectRead<'h, HostObject> {
 
     fn py_len(&self, _vm: &VM<'h>) -> Option<usize> {
         None
+    }
+
+    fn py_call(&mut self, args: ArgValues, vm: &mut VM<'h>) -> RunResult<CallResult> {
+        let id = self.id();
+        let obj = *self.get(vm.heap);
+        dispatch_call(vm, id, obj, args)
     }
 
     fn py_call_attr(

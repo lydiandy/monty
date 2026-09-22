@@ -34,11 +34,8 @@ const COPY_FUNCTIONS: &[(StaticStrings, CopyFunctions)] = &[
 ];
 
 /// Creates the `copy` module on the heap.
-///
-/// # Panics
-/// Panics if the required strings have not been pre-interned during prepare phase.
 pub fn create_module(vm: &mut VM<'_>) -> HeapId {
-    let mut module = Module::new(StaticStrings::Copy);
+    let mut module = Module::new(StaticStrings::Copy, vm.interns);
 
     for (name, func) in COPY_FUNCTIONS {
         module.set_attr(*name, Value::ModuleFunction(ModuleFunctions::Copy(*func)), vm);
@@ -574,8 +571,8 @@ impl<C: ContainsHeap> DropWithContext<C> for Memo {
 ///
 /// Polls the clock as the deep-copy loops do: a shallow copy of a large
 /// container reaches no instruction checkpoint between entering `copy.copy`
-/// and returning, so without this the whole walk is invisible to
-/// `max_duration`. The clones are guarded because that poll can now cut the
+/// and returning, so without this the whole walk is invisible to the time
+/// limits. The clones are guarded because that poll can now cut the
 /// loop short with items already taken.
 pub(crate) fn clone_items<'h>(
     len: usize,

@@ -1,6 +1,6 @@
 ---
 title: Monty
-description: "A sandboxed Python interpreter written in Rust for code written by AI. Start latency <1ms. Pause and resume. Resource limits. Available from PyPI, NPM and crates.io."
+description: "A secure Python sandbox written in Rust for code written by AI. Start latency <1ms. Pause and resume. Resource limits. Available from PyPI, NPM and crates.io."
 ---
 
 # Monty
@@ -15,29 +15,35 @@ description: "A sandboxed Python interpreter written in Rust for code written by
   <a href="https://logfire.pydantic.dev/docs/join-slack/"><img src="https://img.shields.io/badge/Slack-Join%20Slack-4A154B?logo=slack" alt="Join Slack"></a>
 </p>
 
-A minimal, secure Python 3.14 interpreter written in Rust for use by AI.
+A minimal, secure Python sandbox written in Rust for code written by AI.
 
-Monty avoids the latency, complexity and cost of using a full container based sandbox for running LLM generated code.
+Monty avoids the latency, complexity and cost of a container based sandbox for running LLM generated code.
+It comes in two forms: **OSS Monty**, the MIT licensed Python 3.14 sandbox you install as a package, and
+[**Full Monty**](server.md), the commercial server that runs the same sandbox behind a WebSocket as a container image.
 
 ## Latency
 
 ![Time to create a sandbox and run 10 REPL commands](img/startup-latency.svg)
 
-| Sandbox                      | Cold start | Agent run, warm† | Combined‡ |
-| ---------------------------- | ---------- | ---------------- | --------- |
-| Monty                        | 4.50 ms    | 0.40 ms          | 4.90 ms   |
-| Full Monty (WebSocket)       | 3.50 ms    | 3.90 ms          | 7.40 ms   |
-| WASI / wasmtime              | 16 ms      | 180 ms           | 200 ms    |
-| Docker                       | 195 ms     | 700 ms           | 900 ms    |
-| Sandboxing service (Daytona) | 1500 ms    | 400 ms           | 1900 ms   |
-| Pyodide in Deno              | 2700 ms    | 35 ms            | 2700 ms   |
+| Sandbox                | Cold start | Agent run, warm† | Combined‡ | Execution env§ |
+| ---------------------- | ---------- | ---------------- | --------- | -------------- |
+| OSS Monty              | 4.50 ms    | 0.40 ms          | 4.90 ms   | local          |
+| Full Monty (WebSocket) | 3.50 ms    | 3.90 ms          | 7.40 ms   | remote         |
+| WASI / wasmtime        | 16 ms      | 180 ms           | 200 ms    | local          |
+| local Docker           | 195 ms     | 700 ms           | 900 ms    | local          |
+| Sandboxing service     | 1500 ms    | 400 ms           | 1900 ms   | remote         |
+| Pyodide in Deno        | 2700 ms    | 35 ms            | 2700 ms   | local          |
 
-† 10 commands run in a REPL against a sandbox that already exists, as you might expect from a simple agent with code
+**†** 10 commands run in a REPL against a sandbox that already exists, as you might expect from a simple agent with code
 mode.
-Monty and Full Monty keep the session, so each command is one feed; the others have no persistent interpreter, so
+OSS Monty and Full Monty keep the session, so each command is one feed; the others have no persistent interpreter, so
 command *n* re-runs commands 1 to *n*.
 
-‡ The time to create the sandbox and perform the agent run: the two columns added together.
+**‡** The time to create the sandbox and perform the agent run: the two columns added together.
+
+**§** OSS Monty, WASI, local Docker and Pyodide run the code on the same machine as the application calling them.
+Full Monty and sandboxing services run it remotely, which reduces the blast radius of an escape and lets the sandboxes
+scale independently of the hosts calling them.
 
 Learn more in the [comparison to alternatives](alternatives.md).
 
@@ -50,24 +56,22 @@ Learn more in the [comparison to alternatives](alternatives.md).
 
 ## Why Monty
 
-1. **Latency in microseconds, not seconds.** A sandbox plus ten REPL commands takes 5 ms against 900 ms for Docker and
-    1900 ms for a sandboxing service, because the sandbox is a subprocess, a command is one message each way, and the
+1. **Latency in milliseconds, not seconds.** A sandbox plus ten REPL commands takes 5 ms vs. 1900 ms for a
+    sandboxing service, because the sandbox is a subprocess, a command is one message each way, and the
     session persists so nothing is re-run.
     See [start latency](#latency).
-1. **Suspend and resume from bytes.** Every host call suspends the interpreter; `feed_start` returns the suspension and
-    `dump()` serialises the whole interpreter, paused call stack included, to bytes you can store and `load_snapshot`
-    later on another machine.
-    There are no file descriptors, sockets or threads inside the sandbox, so nothing has to be reconstructed.
+1. **Simple to deploy at massive scale.** Because you're not provisioning a new VM or container for every sandbox
+    you can run thousands of workers with minimal cost and complexity.
+1. **Suspend and resume from bytes.** Monty lets you dump the whole sandbox state to bytes at an external function call
+    or at the end of a repl snippet. This makes long external function calls and human-in-the-loop not only possible
+    but very cheap. It also makes extremely long running REPL sessions easy to implement.
     See [snapshots](snapshots.md).
-1. **Strict resource limits** `max_memory`, `max_duration_secs` and `max_recursion_depth` are enforced by the VM
-    itself, and `max_suspensions` by the pool; `'x' * 10**12` raises `MemoryError` before the allocation is
-    attempted.
+1. **Strict resource limits** maximum memory and execution time are enforced by the VM itself
+    so `'x' * 10**12` raises `MemoryError` before the allocation is attempted.
     See [resource limits](resource-limits.md).
-1. **A package, not infrastructure.** `uv add pydantic-monty`, `npm install @pydantic/monty` or `cargo add monty-pool`:
-    about 4.5 MB, no daemon, no image, no API key, and a worker baseline of about 2 MB so one machine runs hundreds.
-    See [getting started](quickstart/python.md).
-1. **MIT licensed, with commercial options.** The interpreter, the pool and bindings are open source.
-    [Full Monty](server.md) runs the same workers behind a WebSocket as a container image, adding OS-level isolation,
+1. **Local package for development, commercial option for scale.** OSS Monty provides packages for Python, JS and Rust,
+    making it trivial to get started with Monty. For greater security guards and larger scale deployments,
+    [Full Monty](server.md) runs the same workers behind a WebSocket as a container image, adding OS-level isolation
     and horizontal scaling.
 
 ## Example

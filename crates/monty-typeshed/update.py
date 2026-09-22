@@ -23,12 +23,15 @@ ALLOWED_FUNCTIONS = {
     'bin',
     'chr',
     'divmod',
+    'eval',
+    'exec',
     'hash',
     'hex',
     'id',
     'isinstance',
     'iter',
     'len',
+    'locals',
     'max',
     'min',
     'next',
@@ -169,6 +172,7 @@ pathlib.types: 3.14-
 random: 3.0-
 re: 3.0-
 sys: 3.0-
+time: 3.0-
 typing: 3.5-
 typing_extensions: 3.7-
 types: 3.0-

@@ -454,6 +454,16 @@ impl<'h> HeapRead<'h, BoundMethod> {
 }
 
 impl<'h> PyTrait<'h> for HeapObjectRead<'h, BoundMethod> {
+    /// Re-dispatches to the underlying function with the captured receiver
+    /// pushed in front of the call's own arguments.
+    fn py_call(&mut self, args: ArgValues, vm: &mut VM<'h>) -> RunResult<CallResult> {
+        let bound = self.get(vm.heap);
+        let instance = bound.instance.clone_with_heap(vm);
+        let func = bound.func.clone_with_heap(vm);
+        defer_drop!(func, vm);
+        vm.call_function(func, args.prepend(instance))
+    }
+
     fn py_type(&self, _vm: &VM<'h>) -> Type {
         // Monty has no dedicated `method` type; bound methods report `function`.
         Type::Function
@@ -513,7 +523,7 @@ pub(crate) fn instance_getattr(self_id: HeapId, attr: &EitherStr, vm: &mut VM<'_
 /// Split out so the synthesized dataclass `__repr__`/`__eq__` read their fields
 /// exactly as `self.field` does, binding a function-valued class member as a
 /// [`BoundMethod`].
-pub(crate) fn instance_attr(self_id: HeapId, attr: &str, vm: &mut VM<'_>) -> Option<Value> {
+pub(crate) fn instance_attr(self_id: HeapId, attr: &str, vm: &VM<'_>) -> Option<Value> {
     if let HeapReadOutput::Instance(inst) = vm.heap.read(self_id)
         && let Some(value) = inst
             .get(vm.heap)

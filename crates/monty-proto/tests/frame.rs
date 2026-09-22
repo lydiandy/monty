@@ -21,11 +21,13 @@ fn feed() -> pb::ParentRequest {
     pb::ParentRequest {
         kind: Some(RequestKind::Feed(pb::Feed {
             code: "1 + 1".to_owned(),
-            inputs: vec![],
+            inputs: vec![].into(),
+            values: None,
             skip_type_check: false,
             cwd: "/".to_owned(),
-        
-            host_modules: Vec::new(),})),
+
+            host_modules: Default::default(),
+        })),
         trace_parent: None,
     }
 }

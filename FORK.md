@@ -39,9 +39,9 @@ fork 仍会改的共享文件（冲突预算）：
 | `crates/monty/src/heap_data.rs` | `HeapData::HostObject`，以及 `is_callable` / `py_type` / `py_iter` 的分支 | 每加一种 heap payload |
 | `crates/monty/src/types/type.rs` | 枚举末尾的 `Type::HostObject` | 每加一个 `Type` 变体 |
 | `crates/monty/src/heap/mod.rs` | `Heap.host: HostVtableSlot`，挨着其它弱索引 | 每加一个 `Heap` 字段 |
-| `crates/monty/src/bytecode/vm/call.rs` | `HostObject` 的 match 臂，挨着其它可调用对象 | 每加一种可调用 heap 类型 |
+| `crates/monty/src/bytecode/vm/call.rs` | 不再手写 match。`HostObject::py_call` 调 `embed::dispatch_call`，转发宏里放在 `Closure` / `FunctionDefaults` / `ExtFunction` 后面 | 每加一种可调用 heap 类型 |
 | `crates/monty/src/dump_format.rs` | `StaticStrings` 和 `Type` 的 fingerprint 常量 | 上面每一处改动 |
-| `crates/monty/src/bytecode/vm/mod.rs` | `VM` 上的 `LoadHostModule` / `host_modules` | 上游改 import 时 |
+| `crates/monty/src/bytecode/vm/mod.rs` | 没有单独 opcode。`load_module` 不是 stdlib 就进 `load_host_module` | 上游改 import 时 |
 | `crates/monty/src/run.rs` | `Executor.host_modules` | 较少 |
 | `crates/monty/src/lib.rs` | 再导出 embed 类型 | rustfmt / 导出列表抖动 |
 
@@ -146,8 +146,8 @@ cargo test -p monty --offline serialized_components_match_dump_version -- --noca
 | 留在 fork（代价是偶发冲突） | 从共享文件挪走（代价是一次性重构） |
 | --- | --- |
 | `HeapData::HostObject` + `Type::HostObject` | 控件名离开 `StaticStrings` |
-| `call.rs` 里一个臂 | `Heap.host` → `VM` / `Executor` |
-| `vm/mod.rs` 里的 `LoadHostModule` 钩子 | 宿主 import 正文已经在 `host_modules.rs` / `embed.rs` |
+| `HostObject::py_call` | `Heap.host` → `VM` / `Executor` |
+| `load_module` 落到 `load_host_module` | 宿主 import 正文已经在 `host_modules.rs` / `embed.rs` |
 | 每次合并后更新 dump fingerprint | — |
 
 我们接受**一种**新的 heap/type 变体带来的冲突。
@@ -299,3 +299,13 @@ GitHub 提示冲突时，**不要**点 “Sync fork” / “Discard N commits”
 3. 合并时优先看上表四条路径；生成代码冲突时：**先合 `.proto` / `.wit` 语义，再重新生成**，不要手改生成文件硬拼。
 4. 若上游以后**官方也加 host modules**：应**弃 fork 字段、跟官方命名与形状**，别双轨长留。
 5. **不要**为了省事再横向加旁路 crate / 复制一套 feed 栈；竖切保持窄，合并成本才可控。
+
+### 2026-09-22 — 跟随 `v1.0.0-beta.2`
+
+- 上游 tip `64662cc5`（`v1.0.0-beta.2`），自 merge-base `4f0fdd4d` 起 35 个 commit。
+- 冲突：`tracing.rs`、`monty.proto`、生成的 `monty.v1.rs`、`worker.rs`、`compiler.rs`、`op.rs`、`call.rs`、`vm/mod.rs`、`dump_format.rs`、`heap/mod.rs`、`heap_data.rs`、`intern.rs`、`lib.rs`、`repl.rs`、`run.rs`、`module.rs`。
+- `LoadModule` 的操作数已是模块名，不再保留 fork 的 `LoadHostModule` opcode（那个槽位现在是上游的 `LoadName`）。未知模块在 `load_module` 里落到 `load_host_module`。
+- `HostObject` 仍在 `HeapData` / `Type` 尾巴。调用走 `PyTrait::py_call`，不再在 `call.rs` 里留 match 臂。
+- `DUMP_VERSION` 跟上游，仍是 12。`Type` fingerprint 因尾巴上的 `HostObject` 与上游不同，是 `0xb92a_0953_8a54_fe3b`。opcode fingerprint 与上游相同。
+- proto `Feed.host_modules` 是字段 6（`cwd` 是 5）。生成代码按 schema 重生，没有手拼。
+- 本 clone 的 `origin` 是 fork，合的是 `upstream/main`。

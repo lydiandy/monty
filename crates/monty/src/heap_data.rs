@@ -13,10 +13,11 @@ use crate::{
     args::ArgValues,
     asyncio::{Awaiter, Coroutine, ExternalFuture, ExternalFutureState, GatherFuture, GatherState},
     bytecode::{CallResult, VM},
+    defer_drop,
     exception_private::{ExcTypeExt, RunError, RunResult, SimpleException},
     expressions::CmpOperator,
     hash::{HashValue, identity_hash},
-    heap::{DropWithContext, HeapId, HeapItem, HeapReadOutput},
+    heap::{DropWithContext, HeapId, HeapItem, HeapObjectRead, HeapReadOutput},
     intern::FunctionId,
     modules::collections::defaultdict::defaultdict_missing,
     types::{LazyHeapSet, LongInt, PyTrait, Type, str::allocate_string},
@@ -257,8 +258,11 @@ impl HeapData {
 
     /// Whether calling a `Ref` to this heap data would succeed at dispatch.
     ///
-    /// The one place the callable heap-variant set is listed; keep in sync with
-    /// `VM::call_heap_callable`.
+    /// A conservative subset of the types overriding [`PyTrait::py_call`]: it
+    /// is what `partial()` and friends screen a callable argument with, and it
+    /// has never admitted `HostClassType` or `NamedTupleClass`, both of which
+    /// dispatch perfectly well. Widening it changes what those builtins accept,
+    /// so it is not simply the list of `py_call` overrides.
     #[must_use]
     pub(crate) fn is_callable(&self) -> bool {
         matches!(
@@ -359,30 +363,40 @@ impl Deref for CellValue {
 /// A closure: a function that captures variables from enclosing scopes.
 ///
 /// Contains a reference to the function definition, a vector of captured cell HeapIds,
-/// and evaluated default values (if any). When the closure is called, these cells are
-/// passed to the RunFrame for variable access. When the closure is dropped, we must
-/// decrement the ref count on each captured cell and each default value.
+/// evaluated default values (if any) and the globals dict it was defined under
+/// (if any). When the closure is called, the cells are passed to the frame for
+/// variable access. When the closure is dropped, we must decrement the ref
+/// count on each captured cell, each default value and the globals dict.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Closure {
     /// The function definition being captured.
     pub func_id: FunctionId,
-    /// Captured cells from enclosing scopes.
-    pub cells: Vec<HeapId>,
+    /// Captured cells from enclosing scopes. Boxed slices rather than `Vec`s
+    /// (never grown after construction) keep this the size of the largest
+    /// `HeapData` variant, not larger.
+    pub cells: Box<[HeapId]>,
     /// Evaluated default parameter values (if any).
-    pub defaults: Vec<Value>,
+    pub defaults: Box<[Value]>,
+    /// Owned reference to the `exec()` / `eval()` globals dict the closure was
+    /// defined under; `None` when its globals are module slots.
+    pub globals: Option<HeapId>,
 }
 
-/// A function with evaluated default parameter values (non-closure).
+/// A `def` that needs a heap object but captures nothing: it has evaluated
+/// default values, an explicit globals dict, or both.
 ///
-/// Contains a reference to the function definition and the evaluated default values.
-/// When the function is called, defaults are cloned for missing optional parameters.
-/// When dropped, we must decrement the ref count on each default value.
+/// When the function is called, defaults are cloned for missing optional
+/// parameters and the frame resolves globals through the dict. When dropped,
+/// we must decrement the ref count on each default value and the dict.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct FunctionDefaults {
     /// The function definition being captured.
     pub func_id: FunctionId,
     /// Evaluated default parameter values (if any).
     pub defaults: Vec<Value>,
+    /// Owned reference to the `exec()` / `eval()` globals dict the function
+    /// was defined under; `None` when its globals are module slots.
+    pub globals: Option<HeapId>,
 }
 
 impl HeapItem for CellValue {
@@ -399,6 +413,7 @@ impl HeapItem for Closure {
         for default in &mut self.defaults {
             default.py_dec_ref_ids(stack);
         }
+        stack.extend(self.globals);
     }
 }
 
@@ -408,7 +423,117 @@ impl HeapItem for FunctionDefaults {
         for default in &mut self.defaults {
             default.py_dec_ref_ids(stack);
         }
+        stack.extend(self.globals);
     }
+}
+
+/// The shared tail of calling a `def`: both function representations differ only
+/// in whether they carry captured cells.
+///
+/// The cells and defaults are copied out before dispatching, so no borrow on the
+/// callable is live while its body runs and the body may reach it again.
+fn call_def(
+    func_id: FunctionId,
+    cells: &[HeapId],
+    defaults: Vec<Value>,
+    globals: Option<HeapId>,
+    args: ArgValues,
+    vm: &mut VM<'_>,
+) -> RunResult<CallResult> {
+    defer_drop!(defaults, vm);
+    vm.call_def_function(func_id, cells, defaults, globals, args)
+}
+
+impl<'h> PyTrait<'h> for HeapObjectRead<'h, Closure> {
+    fn py_type(&self, _: &VM<'h>) -> Type {
+        Type::Function
+    }
+
+    fn py_len(&self, _: &VM<'h>) -> Option<usize> {
+        None
+    }
+
+    /// Two closures over the same `def` are equal only if they captured the
+    /// same cells; the defaults play no part, as in CPython.
+    fn py_eq_impl(&self, other: &Value, vm: &mut VM<'h>) -> RunResult<Option<bool>> {
+        Ok(match other.read_heap(vm) {
+            Some(HeapReadOutput::Closure(other)) => {
+                let this = self.get(vm.heap);
+                let other = other.get(vm.heap);
+                Some(this.func_id == other.func_id && this.cells == other.cells)
+            }
+            _ => None,
+        })
+    }
+
+    /// Hashes by `def`, so a closure and its equal share a bucket.
+    fn py_hash(&self, vm: &mut VM<'h>) -> RunResult<Option<HashValue>> {
+        Ok(Some(hash_func_id(self.get(vm.heap).func_id)))
+    }
+
+    fn py_bool(&self, _: &mut VM<'h>) -> RunResult<bool> {
+        Ok(true)
+    }
+
+    fn py_repr_fmt(&self, f: &mut impl Write, vm: &mut VM<'h>, _: &mut LazyHeapSet) -> RunResult<()> {
+        let func_id = self.get(vm.heap).func_id;
+        Ok(vm.interns.get_function(func_id).py_repr_fmt(f, vm.interns, 0)?)
+    }
+
+    fn py_call(&mut self, args: ArgValues, vm: &mut VM<'h>) -> RunResult<CallResult> {
+        let closure = self.get(vm.heap);
+        let (func_id, cells, globals) = (closure.func_id, closure.cells.clone(), closure.globals);
+        let defaults = closure.defaults.iter().map(|v| v.clone_with_heap(vm)).collect();
+        call_def(func_id, &cells, defaults, globals, args, vm)
+    }
+}
+
+impl<'h> PyTrait<'h> for HeapObjectRead<'h, FunctionDefaults> {
+    fn py_type(&self, _: &VM<'h>) -> Type {
+        Type::Function
+    }
+
+    fn py_len(&self, _: &VM<'h>) -> Option<usize> {
+        None
+    }
+
+    /// Equal when they decorate the same `def`: with no captured scope, the
+    /// defaults are all that could differ and CPython ignores those too.
+    fn py_eq_impl(&self, other: &Value, vm: &mut VM<'h>) -> RunResult<Option<bool>> {
+        Ok(match other.read_heap(vm) {
+            Some(HeapReadOutput::FunctionDefaults(other)) => {
+                Some(self.get(vm.heap).func_id == other.get(vm.heap).func_id)
+            }
+            _ => None,
+        })
+    }
+
+    fn py_hash(&self, vm: &mut VM<'h>) -> RunResult<Option<HashValue>> {
+        Ok(Some(hash_func_id(self.get(vm.heap).func_id)))
+    }
+
+    fn py_bool(&self, _: &mut VM<'h>) -> RunResult<bool> {
+        Ok(true)
+    }
+
+    fn py_repr_fmt(&self, f: &mut impl Write, vm: &mut VM<'h>, _: &mut LazyHeapSet) -> RunResult<()> {
+        let func_id = self.get(vm.heap).func_id;
+        Ok(vm.interns.get_function(func_id).py_repr_fmt(f, vm.interns, 0)?)
+    }
+
+    fn py_call(&mut self, args: ArgValues, vm: &mut VM<'h>) -> RunResult<CallResult> {
+        let function = self.get(vm.heap);
+        let (func_id, globals) = (function.func_id, function.globals);
+        let defaults = function.defaults.iter().map(|v| v.clone_with_heap(vm)).collect();
+        call_def(func_id, &[], defaults, globals, args, vm)
+    }
+}
+
+/// Hashes a function identity, the hash both `def` representations report.
+fn hash_func_id(func_id: FunctionId) -> HashValue {
+    let mut hasher = DefaultHasher::new();
+    func_id.hash(&mut hasher);
+    HashValue::new(hasher.finish())
 }
 
 impl HeapItem for SimpleException {
@@ -429,6 +554,7 @@ impl HeapItem for Coroutine {
         for value in &mut self.namespace {
             value.py_dec_ref_ids(stack);
         }
+        stack.extend(self.globals);
     }
 }
 
@@ -461,7 +587,11 @@ impl HeapItem for ExternalFuture {
         // `Pending { awaiter: Some(Awaiter::GatherSlot { gather, .. }) }`
         // owns an inc_ref on `gather` — release it when this entry is
         // freed. `Awaiter::Task` and `None` own nothing. `Resolved` owns
-        // the cached value; `Failed` carries no heap refs.
+        // the cached value; `Failed` carries no heap refs. A pending sleep
+        // result is owned until resolution takes it.
+        if let Some(result) = &mut self.sleep_result {
+            result.py_dec_ref_ids(stack);
+        }
         match &mut self.state {
             ExternalFutureState::Resolved(value) => value.py_dec_ref_ids(stack),
             ExternalFutureState::Pending {
@@ -526,11 +656,11 @@ macro_rules! heap_read_output_py_trait_forward {
             Self::Time($value) => $body,
             Self::TimeDelta($value) => $body,
             Self::TimeZone($value) => $body,
+            Self::Closure($value) => $body,
+            Self::FunctionDefaults($value) => $body,
+            Self::ExtFunction($value) => $body,
             Self::HostObject($value) => $body,
-            Self::Closure(_)
-            | Self::FunctionDefaults(_)
-            | Self::ExtFunction(_)
-            | Self::Cell(_)
+            Self::Cell(_)
             | Self::Exception(_)
             | Self::Module(_)
             | Self::Coroutine(_)
@@ -578,10 +708,7 @@ impl<'h> PyTrait<'h> for HeapReadOutput<'h> {
             |value| value.py_bool(vm),
             else {
                 match self {
-                    Self::Closure(_)
-                    | Self::FunctionDefaults(_)
-                    | Self::ExtFunction(_)
-                    | Self::Cell(_)
+                    Self::Cell(_)
                     | Self::Exception(_)
                     | Self::Module(_)
                     | Self::Coroutine(_)
@@ -637,6 +764,14 @@ impl<'h> PyTrait<'h> for HeapReadOutput<'h> {
         heap_read_output_py_trait_forward!(self, |value| value.py_rmod_impl(other, vm), else Ok(None))
     }
 
+    fn py_divmod_impl(&self, other: &Value, vm: &mut VM<'h>) -> RunResult<Option<Value>> {
+        heap_read_output_py_trait_forward!(self, |value| value.py_divmod_impl(other, vm), else Ok(None))
+    }
+
+    fn py_rdivmod_impl(&self, other: &Value, vm: &mut VM<'h>) -> RunResult<Option<Value>> {
+        heap_read_output_py_trait_forward!(self, |value| value.py_rdivmod_impl(other, vm), else Ok(None))
+    }
+
     fn py_pow_impl(&self, other: &Value, modulus: Option<&Value>, vm: &mut VM<'h>) -> RunResult<Option<Value>> {
         heap_read_output_py_trait_forward!(self, |value| value.py_pow_impl(other, modulus, vm), else Ok(None))
     }
@@ -683,6 +818,17 @@ impl<'h> PyTrait<'h> for HeapReadOutput<'h> {
 
     fn py_rrshift_impl(&self, other: &Value, vm: &mut VM<'h>) -> RunResult<Option<Value>> {
         heap_read_output_py_trait_forward!(self, |value| value.py_rrshift_impl(other, vm), else Ok(None))
+    }
+
+    fn py_call(&mut self, args: ArgValues, vm: &mut VM<'h>) -> RunResult<CallResult> {
+        heap_read_output_py_trait_forward!(
+            self,
+            |value| value.py_call(args, vm),
+            else {
+                args.drop_with(vm);
+                Err(ExcType::type_error_not_callable_object(&self.py_type_name(vm)))
+            }
+        )
     }
 
     fn py_call_attr(&mut self, vm: &mut VM<'h>, attr: &EitherStr, args: ArgValues) -> Result<CallResult, RunError> {
@@ -750,7 +896,6 @@ impl<'h> PyTrait<'h> for HeapReadOutput<'h> {
             |value| value.py_type(vm),
             else {
                 match self {
-                    Self::Closure(_) | Self::FunctionDefaults(_) | Self::ExtFunction(_) => Type::Function,
                     Self::Cell(_) => Type::Cell,
                     Self::Exception(e) => e.py_type(vm),
                     Self::Module(_) => Type::Module,
@@ -771,20 +916,7 @@ impl<'h> PyTrait<'h> for HeapReadOutput<'h> {
             |value| value.py_eq_impl(other, vm),
             else {
                 match self {
-                    Self::Closure(a) => Ok(match other.read_heap(vm) {
-                        Some(Self::Closure(b)) => {
-                            let a = a.get(vm.heap);
-                            let b = b.get(vm.heap);
-                            Some(a.func_id == b.func_id && a.cells == b.cells)
-                        }
-                        _ => None,
-                    }),
-                    Self::FunctionDefaults(a) => Ok(match other.read_heap(vm) {
-                        Some(Self::FunctionDefaults(b)) => Some(a.get(vm.heap).func_id == b.get(vm.heap).func_id),
-                        _ => None,
-                    }),
-                    Self::ExtFunction(_)
-                    | Self::Cell(_)
+                    Self::Cell(_)
                     | Self::Exception(_)
                     | Self::Module(_)
                     | Self::Coroutine(_)
@@ -803,18 +935,7 @@ impl<'h> PyTrait<'h> for HeapReadOutput<'h> {
             |value| value.py_hash(vm),
             else {
                 match self {
-                    Self::Closure(c) => {
-                        let mut hasher = DefaultHasher::new();
-                        c.get(vm.heap).func_id.hash(&mut hasher);
-                        Ok(Some(HashValue::new(hasher.finish())))
-                    }
-                    Self::FunctionDefaults(fd) => {
-                        let mut hasher = DefaultHasher::new();
-                        fd.get(vm.heap).func_id.hash(&mut hasher);
-                        Ok(Some(HashValue::new(hasher.finish())))
-                    }
                     Self::Cell(value) => Ok(Some(identity_hash(value.id()))),
-                    Self::ExtFunction(value) => Ok(Some(identity_hash(value.id()))),
                     Self::Exception(_)
                     | Self::Module(_)
                     | Self::Coroutine(_)
@@ -832,14 +953,6 @@ impl<'h> PyTrait<'h> for HeapReadOutput<'h> {
             |value| value.py_repr_fmt(f, vm, heap_ids),
             else {
                 match self {
-                    Self::Closure(closure) => Ok(vm
-                        .interns
-                        .get_function(closure.get(vm.heap).func_id)
-                        .py_repr_fmt(f, vm.interns, 0)?),
-                    Self::FunctionDefaults(fd) => Ok(vm
-                        .interns
-                        .get_function(fd.get(vm.heap).func_id)
-                        .py_repr_fmt(f, vm.interns, 0)?),
                     Self::Cell(cell) => Ok(write!(f, "<cell: {} object>", cell.get(vm.heap).0.py_type_name(vm))?),
                     Self::Exception(e) => Ok(e.get(vm.heap).py_repr_fmt(f)?),
                     Self::Module(m) => Ok(write!(f, "<module '{}'>", vm.interns.get_str(m.get(vm.heap).name()))?),
@@ -854,9 +967,6 @@ impl<'h> PyTrait<'h> for HeapReadOutput<'h> {
                         "<coroutine external_future({})>",
                         fut.get(vm.heap).call_id.raw()
                     )?),
-                    Self::ExtFunction(function) => {
-                        Ok(write!(f, "<function '{}' external>", function.get(vm.heap).as_str())?)
-                    }
                     _ => unreachable!("py-trait variants handled by heap_read_output_py_trait_forward"),
                 }
             }

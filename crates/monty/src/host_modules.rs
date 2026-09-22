@@ -1,10 +1,8 @@
 //! Host-registered application modules (`from widgets import button`).
 //!
-//! Monty's compiler only `LoadModule`s [`crate::modules::StandardLib`]. Unknown
-//! names used to become `RaiseImportError` with no `LoadAttr`. Embedders register
-//! an app directory's top-level `.py` files here; the compiler emits
-//! `LoadHostModule` and the VM executes each file as its own module (shared intern
-//! pool, own globals/`Code`). Not file concatenation.
+//! `LoadModule` serves [`crate::modules::StandardLib`]. Any other name falls
+//! through here: a cached module, a native host module, then an app-dir `.py`
+//! file run as its own module (shared intern pool, own globals and `Code`)
 
 use std::{cell::RefCell, collections::HashMap, sync::Arc};
 
@@ -55,11 +53,6 @@ impl HostModuleRegistry {
             specs,
             runtime: RefCell::new(HashMap::new()),
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
-        self.specs.is_empty()
     }
 
     pub fn get(&self, name: &str) -> Option<&HostModuleSpec> {

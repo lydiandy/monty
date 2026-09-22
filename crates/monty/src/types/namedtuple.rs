@@ -89,6 +89,11 @@ pub(crate) struct NamedTuple {
 }
 
 impl NamedTuple {
+    /// The values, in field order.
+    pub(crate) fn items(&self) -> &[Value] {
+        &self.items
+    }
+
     /// Creates a new named tuple.
     ///
     /// # Arguments
@@ -550,13 +555,14 @@ impl<'h> PyTrait<'h> for HeapObjectRead<'h, NamedTuple> {
         // Gated on `class_id`: Monty's internal named tuples (`sys.version_info`,
         // host imports) model CPython *structseqs*, which expose none of the
         // `collections.namedtuple` API.
-        if attr.static_string() == Some(StaticStrings::UnderFields) && self.get(vm.heap).class_id().is_some() {
+        if attr.static_string(vm.interns) == Some(StaticStrings::UnderFields) && self.get(vm.heap).class_id().is_some()
+        {
             return Ok(Some(CallResult::Value(self.fields_tuple(vm))));
         }
         // `_field_defaults` lives only on the class (an instance stores field
         // *names* but not defaults), so it is read through `class_id` rather than
         // rebuilt here — the two spellings then cannot drift apart.
-        if attr.static_string() == Some(StaticStrings::UnderFieldDefaults)
+        if attr.static_string(vm.interns) == Some(StaticStrings::UnderFieldDefaults)
             && let Some(class_id) = self.get(vm.heap).class_id()
             && let HeapReadOutput::NamedTupleClass(class) = vm.heap.read(class_id)
         {
@@ -565,7 +571,8 @@ impl<'h> PyTrait<'h> for HeapObjectRead<'h, NamedTuple> {
         // `__doc__` / `__module__` are class attributes an instance inherits, so
         // read them from the class object rather than duplicating them per instance.
         if let Some(class_id) = self.get(vm.heap).class_id()
-            && let Some(static_attr @ (StaticStrings::DunderDoc | StaticStrings::DunderModule)) = attr.static_string()
+            && let Some(static_attr @ (StaticStrings::DunderDoc | StaticStrings::DunderModule)) =
+                attr.static_string(vm.interns)
             && let HeapData::NamedTupleClass(class) = vm.heap.get(class_id)
         {
             let value = if static_attr == StaticStrings::DunderDoc {
@@ -592,7 +599,7 @@ impl<'h> PyTrait<'h> for HeapObjectRead<'h, NamedTuple> {
         // `count`/`index` are inherited from `tuple`, so unlike the `_`-prefixed
         // methods they are available on structseqs too (`sys.version_info.count(0)`
         // works in CPython).
-        match attr.static_string() {
+        match attr.static_string(vm.interns) {
             Some(StaticStrings::Count) => return self.method_count(vm, args).map(CallResult::Value),
             Some(StaticStrings::Index) => return self.method_index(vm, args).map(CallResult::Value),
             Some(StaticStrings::DunderGetnewargs) => {
@@ -600,7 +607,7 @@ impl<'h> PyTrait<'h> for HeapObjectRead<'h, NamedTuple> {
             }
             _ => {}
         }
-        match attr.static_string().filter(|_| from_factory) {
+        match attr.static_string(vm.interns).filter(|_| from_factory) {
             Some(StaticStrings::UnderAsdict) => self.method_asdict(vm, args).map(CallResult::Value),
             Some(StaticStrings::UnderReplace) => self.method_replace(vm, args).map(CallResult::Value),
             Some(StaticStrings::UnderMake) => self.method_make(vm, args).map(CallResult::Value),
@@ -855,6 +862,11 @@ impl NamedTupleClass {
 }
 
 impl<'h> PyTrait<'h> for HeapObjectRead<'h, NamedTupleClass> {
+    /// Builds an instance from the field values, with no `__init__` to run.
+    fn py_call(&mut self, args: ArgValues, vm: &mut VM<'h>) -> RunResult<CallResult> {
+        construct_namedtuple(self.id(), vm, args).map(CallResult::Value)
+    }
+
     fn py_type(&self, _vm: &VM<'h>) -> Type {
         // The type of a class object is `type` (matching `type(Point) is type`).
         Type::Type
@@ -894,7 +906,7 @@ impl<'h> PyTrait<'h> for HeapObjectRead<'h, NamedTupleClass> {
     }
 
     fn py_getattr(&self, attr: &EitherStr, vm: &mut VM<'h>) -> RunResult<Option<CallResult>> {
-        let value = match attr.static_string() {
+        let value = match attr.static_string(vm.interns) {
             // `namedtuple` assigns `__qualname__ = typename` outright, so it always
             // equals `__name__` and never picks up a dotted path from an enclosing scope.
             Some(StaticStrings::DunderName | StaticStrings::DunderQualname) => {
@@ -922,7 +934,7 @@ impl<'h> PyTrait<'h> for HeapObjectRead<'h, NamedTupleClass> {
     }
 
     fn py_call_attr(&mut self, vm: &mut VM<'h>, attr: &EitherStr, args: ArgValues) -> RunResult<CallResult> {
-        if attr.static_string() == Some(StaticStrings::UnderMake) {
+        if attr.static_string(vm.interns) == Some(StaticStrings::UnderMake) {
             make_namedtuple(self.id(), vm, args).map(CallResult::Value)
         } else {
             args.drop_with(vm);
@@ -1112,8 +1124,8 @@ fn synthesise_doc(class: &NamedTupleClass, interns: &Interns) -> String {
 /// Binds positional and keyword arguments to the class's fields, applies
 /// defaults for omitted trailing fields, and reports arity/keyword errors with
 /// CPython's exact `<lambda>()` wording (its generated `__new__` is a lambda).
-/// Called from the VM's `call_heap_callable` dispatch.
-pub(crate) fn construct_namedtuple(class_id: HeapId, vm: &mut VM<'_>, args: ArgValues) -> RunResult<Value> {
+/// Called from this type's [`PyTrait::py_call`].
+fn construct_namedtuple(class_id: HeapId, vm: &mut VM<'_>, args: ArgValues) -> RunResult<Value> {
     let HeapData::NamedTupleClass(c) = vm.heap.get(class_id) else {
         unreachable!("construct_namedtuple called on a non-namedtuple-class heap entry");
     };

@@ -51,6 +51,7 @@ pub(crate) trait ExcTypeExt: Sized {
         RunError::Exc(ExceptionRaise {
             exc,
             frame: None,
+            snippet_frame: None,
             hide_caret: true, // CPython doesn't show carets for attribute GET errors
         })
     }
@@ -82,6 +83,7 @@ pub(crate) trait ExcTypeExt: Sized {
         RunError::Exc(ExceptionRaise {
             exc,
             frame: None,
+            snippet_frame: None,
             hide_caret: true, // CPython doesn't show carets for attribute GET errors
         })
     }
@@ -111,6 +113,7 @@ pub(crate) trait ExcTypeExt: Sized {
         RunError::Exc(ExceptionRaise {
             exc,
             frame: None,
+            snippet_frame: None,
             hide_caret: true, // CPython doesn't show carets for attribute GET errors
         })
     }
@@ -401,6 +404,33 @@ pub(crate) trait ExcTypeExt: Sized {
         SimpleException::new_msg(
             ExcType::TypeError,
             format!("{name}() takes at most {max} {kind}argument{plural} ({actual} given)"),
+        )
+        .into()
+    }
+
+    /// `PyArg_ParseTuple`'s wording for a fixed arity, which it uses whenever
+    /// min == max: `{name}() takes exactly {n} argument ({actual} given)`
+    /// (plural for `n != 1`; the digit, unlike `METH_O`'s `exactly one`).
+    #[must_use]
+    fn type_error_method_exact(name: &str, n: usize, actual: usize) -> RunError {
+        let plural = if n == 1 { "" } else { "s" };
+        SimpleException::new_msg(
+            ExcType::TypeError,
+            format!("{name}() takes exactly {n} argument{plural} ({actual} given)"),
+        )
+        .into()
+    }
+
+    /// Creates a TypeError for too few arguments to a `PyArg_ParseTuple` call:
+    /// `{name}() takes at least {min} argument(s) ({actual} given)`. Unlike
+    /// [`type_error_at_least_positional`] there is no `positional` qualifier —
+    /// these functions accept no keywords, so CPython never distinguishes.
+    #[must_use]
+    fn type_error_method_at_least(name: &str, min: usize, actual: usize) -> RunError {
+        let plural = if min == 1 { "" } else { "s" };
+        SimpleException::new_msg(
+            ExcType::TypeError,
+            format!("{name}() takes at least {min} argument{plural} ({actual} given)"),
         )
         .into()
     }
@@ -968,6 +998,35 @@ pub(crate) trait ExcTypeExt: Sized {
         Self::type_error("The only supported seed types are:\nNone, int, float, str, bytes, and bytearray.")
     }
 
+    /// The `OverflowError` `time.sleep()` raises for a length past the roughly
+    /// 292 years `PyTime_t` can represent: `timestamp out of range for C PyTime_t`.
+    #[must_use]
+    fn sleep_too_long() -> RunError {
+        SimpleException::new_msg(ExcType::OverflowError, "timestamp out of range for C PyTime_t").into()
+    }
+
+    /// The `OverflowError` the `time` conversion functions raise for epoch
+    /// seconds outside the range a broken-down time can hold:
+    /// `timestamp out of range for platform time_t`.
+    #[must_use]
+    fn timestamp_out_of_range() -> RunError {
+        SimpleException::new_msg(ExcType::OverflowError, "timestamp out of range for platform time_t").into()
+    }
+
+    /// `time.mktime()`'s `OverflowError` for a wall clock it cannot place on
+    /// the epoch: `mktime argument out of range`.
+    #[must_use]
+    fn mktime_out_of_range() -> RunError {
+        SimpleException::new_msg(ExcType::OverflowError, "mktime argument out of range").into()
+    }
+
+    /// The `TypeError` the `time` conversion functions raise for a time tuple of
+    /// the wrong length: `{name}(): illegal time tuple argument`.
+    #[must_use]
+    fn illegal_time_tuple(name: &str) -> RunError {
+        SimpleException::new_msg(ExcType::TypeError, format!("{name}(): illegal time tuple argument")).into()
+    }
+
     /// Creates a TypeError for bytes() constructor with invalid type.
     ///
     /// Matches CPython's format: `TypeError: cannot convert '{type}' object to bytes`
@@ -1427,6 +1486,7 @@ pub(crate) trait ExcTypeExt: Sized {
         RunError::Exc(ExceptionRaise {
             exc,
             frame: None,
+            snippet_frame: None,
             hide_caret: true, // CPython doesn't show carets for module not found errors
         })
     }
@@ -1497,6 +1557,7 @@ pub(crate) trait ExcTypeExt: Sized {
         RunError::Exc(ExceptionRaise {
             exc,
             frame: None,
+            snippet_frame: None,
             hide_caret: true,
         })
     }
@@ -1665,6 +1726,18 @@ pub(crate) trait ExcTypeExt: Sized {
         .into()
     }
 
+    /// The `TypeError` CPython's `_PyTime_FromSecondsObject` raises for a
+    /// non-numeric length (`time.sleep`): `'{type}' object cannot be
+    /// interpreted as an integer or float`.
+    #[must_use]
+    fn type_error_not_integer_or_float(type_: &str) -> RunError {
+        SimpleException::new_msg(
+            ExcType::TypeError,
+            format!("'{type_}' object cannot be interpreted as an integer or float"),
+        )
+        .into()
+    }
+
     /// Creates a ZeroDivisionError for zero raised to a negative power.
     ///
     /// Matches CPython's format: `ZeroDivisionError: zero to a negative power`
@@ -1735,15 +1808,6 @@ pub(crate) trait ExcTypeExt: Sized {
             "pow() 2nd argument cannot be negative when 3rd argument specified",
         )
         .into()
-    }
-
-    /// Creates a ZeroDivisionError for divmod by zero (both integer and float).
-    ///
-    /// Matches CPython's format: `ZeroDivisionError: division by zero`
-    /// Note: CPython uses the same message for both integer and float divmod.
-    #[must_use]
-    fn divmod_by_zero() -> RunError {
-        SimpleException::new_msg(ExcType::ZeroDivisionError, "division by zero").into()
     }
 
     /// Creates a TypeError for str.join() when an item is not a string.
@@ -2390,11 +2454,25 @@ impl SimpleException {
         f.write_char(')')
     }
 
+    /// Records a position in committed code; propagation supplies the frame name.
     pub(crate) fn with_position(self, position: CodeRange) -> ExceptionRaise {
         ExceptionRaise {
             exc: self,
             frame: Some(RawStackFrame::from_position(position)),
+            snippet_frame: None,
             hide_caret: false,
+        }
+    }
+
+    /// Resolves a rejected snippet's location before its provisional intern IDs are discarded.
+    /// Caller frames are still collected from the VM as the error propagates.
+    pub(crate) fn with_snippet_position(self, position: CodeRange, source: &str) -> ExceptionRaise {
+        let mut frame = StackFrame::from_position(position, "<string>", &mut SourceMap::new(source));
+        frame.preview_line = None;
+        frame.hide_caret = matches!(self.exc_type, ExcType::ImportError | ExcType::ModuleNotFoundError);
+        ExceptionRaise {
+            snippet_frame: Some(Box::new(frame)),
+            ..self.into()
         }
     }
 }
@@ -2407,7 +2485,7 @@ impl<'h> HeapRead<'h, SimpleException> {
     pub fn py_getattr(&self, attr: &EitherStr, vm: &mut VM<'h>) -> Option<CallResult> {
         // Fast path: interned strings can be matched by ID
         let is_args = attr
-            .static_string()
+            .static_string(vm.interns)
             .map_or_else(|| attr.as_str(vm.interns) == "args", |ss| ss == StaticStrings::Args);
 
         if is_args {
@@ -2428,8 +2506,10 @@ impl<'h> HeapRead<'h, SimpleException> {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ExceptionRaise {
     pub exc: SimpleException,
-    /// The stack frame where the exception was raised (first in vec is closest "bottom" frame).
+    /// Innermost executed frame, with callers linked as parents.
     pub frame: Option<RawStackFrame>,
+    /// Resolved innermost location of a rejected snippet, independent of its discarded intern IDs.
+    pub snippet_frame: Option<Box<StackFrame>>,
     /// Whether to hide the caret marker when creating the stack frame.
     ///
     /// CPython doesn't show carets for attribute GET errors, but does show them
@@ -2444,6 +2524,7 @@ impl From<SimpleException> for ExceptionRaise {
         Self {
             exc,
             frame: None,
+            snippet_frame: None,
             hide_caret: false,
         }
     }
@@ -2454,6 +2535,7 @@ impl From<MontyException> for ExceptionRaise {
         Self {
             exc: exc.into(),
             frame: None,
+            snippet_frame: None,
             hide_caret: false,
         }
     }
@@ -2519,29 +2601,37 @@ impl ExceptionRaise {
     #[must_use]
     pub fn into_python_exception<'s>(
         self,
-        interns: &Interns,
+        interns: &'s Interns,
         source_for: impl Fn(&str) -> Option<&'s str>,
     ) -> MontyException {
         // Per-filename SourceMap cache. Typical tracebacks touch 1-3 unique
         // filenames so a tiny `Vec` beats a HashMap on both allocations and
         // lookup cost.
         let mut cache: Vec<(StringId, SourceMap<'s>)> = Vec::new();
-        let traceback = self
+        let mut traceback = self
             .frame
             .map(|frame| {
                 let mut frames = Vec::new();
                 let mut current = Some(&frame);
                 while let Some(f) = current {
                     let fname_id = f.position.filename;
+                    // An `eval()` / `exec()` snippet resolves against its own
+                    // recorded source, never the host's, and prints no source
+                    // line: CPython has nothing to read back for `<string>`.
+                    let eval_source = interns.eval_source(fname_id);
                     let sm_idx = if let Some(i) = cache.iter().position(|(k, _)| *k == fname_id) {
                         i
                     } else {
-                        let fname = interns.get_str(fname_id);
-                        let src = source_for(fname).unwrap_or("");
+                        let src =
+                            eval_source.unwrap_or_else(|| source_for(interns.get_filename(fname_id)).unwrap_or(""));
                         cache.push((fname_id, SourceMap::new(src)));
                         cache.len() - 1
                     };
-                    frames.push(StackFrame::from_raw(f, interns, &mut cache[sm_idx].1));
+                    let mut stack_frame = StackFrame::from_raw(f, interns, &mut cache[sm_idx].1);
+                    if eval_source.is_some() {
+                        stack_frame.preview_line = None;
+                    }
+                    frames.push(stack_frame);
                     current = f.parent.as_deref();
                 }
                 // Reverse so outermost frame is first (Python's "most recent call last" ordering)
@@ -2549,6 +2639,9 @@ impl ExceptionRaise {
                 frames
             })
             .unwrap_or_default();
+        if let Some(frame) = self.snippet_frame {
+            traceback.push(*frame);
+        }
 
         MontyException::with_traceback(self.exc.exc_type, self.exc.arg, traceback).with_data(self.exc.data)
     }
@@ -2689,7 +2782,7 @@ impl RunError {
     #[must_use]
     pub fn into_python_exception<'s>(
         self,
-        interns: &Interns,
+        interns: &'s Interns,
         source_for: impl Fn(&str) -> Option<&'s str>,
     ) -> MontyException {
         match self {

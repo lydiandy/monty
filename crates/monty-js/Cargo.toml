@@ -1,6 +1,6 @@
 [package]
 name = "monty-js"
-description = "Node.js/TypeScript bindings for the Monty sandboxed Python interpreter"
+description = "Node.js/TypeScript bindings for the Monty sandbox"
 readme = "README.md"
 # Distributed as a napi-rs native addon on npm, not as a crate on crates.io.
 publish = false
@@ -19,7 +19,7 @@ repository = { workspace = true }
 crate-type = ["cdylib"]
 
 [dependencies]
-monty-types = { workspace = true }
+monty-types = { workspace = true, features = ["tzdb"] }
 opentelemetry = "0.32"
 opentelemetry_sdk = "0.32"
 monty-pool = { workspace = true, features = ["telemetry"] }
