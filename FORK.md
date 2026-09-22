@@ -309,3 +309,4 @@ GitHub 提示冲突时，**不要**点 “Sync fork” / “Discard N commits”
 - `DUMP_VERSION` 跟上游，仍是 12。`Type` fingerprint 因尾巴上的 `HostObject` 与上游不同，是 `0xb92a_0953_8a54_fe3b`。opcode fingerprint 与上游相同。
 - proto `Feed.host_modules` 是字段 6（`cwd` 是 5）。生成代码按 schema 重生，没有手拼。
 - 本 clone 的 `origin` 是 fork，合的是 `upstream/main`。
+- merge commit `c03faf05`。
