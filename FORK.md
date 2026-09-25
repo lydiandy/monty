@@ -310,3 +310,19 @@ GitHub 提示冲突时，**不要**点 “Sync fork” / “Discard N commits”
 - proto `Feed.host_modules` 是字段 6（`cwd` 是 5）。生成代码按 schema 重生，没有手拼。
 - 本 clone 的 `origin` 是 fork，合的是 `upstream/main`。
 - merge commit `c03faf05`。
+
+### 2026-09-25 — 跟随 `v1.0.0`
+
+- 上游 tip `dd5307d1`（`v1.0.0` tag 是 `85c5d1f6`，其后还有 2 个 commit），自 merge-base `64662cc5`（beta.2）起 15 个 commit、173 个文件。
+- 本 clone 的 `origin` 是 fork，合的是 `upstream/main`。**未 push**。
+- 冲突 5 个路径：`crates/monty-js/ts/index.ts`、`crates/monty-js/ts/node.ts`、`crates/monty/src/lib.rs`、`crates/monty/src/modules/copy.rs`、`crates/monty/src/dump_format.rs`。
+  - js 两个：上游把公共导出收进新的 `shared.ts`，`index.ts` / `node.ts` 只留 `export * from`。取上游，把 fork 的 `type HostModuleSource` 补进 `shared.ts` 的 `./session.js` 导出块
+  - `lib.rs`：上游 `dump_format` 导出加了 `DumpDecodeError` / `DumpEncodeError`，与 fork 的 `embed` / `heap::HeapId` 并列
+  - `copy.rs`：上游把「能 copy 吗」的判别收敛成一个 `classify`（返回 `Copyability`），match 里改成 `_ => unreachable!()`。取上游结构，在 `classify` 的 `Refused` 组末尾接回 `HeapReadOutput::HostObject`
+  - `dump_format.rs`：`Type` 指纹从「声明顺序（`variant_order_fingerprint`）」改成「serde 变体名排序（`variant_name_fingerprint`）」。fork 尾巴上的 `HostObject` 让哈希变成 `0xdcbf_71db_6d81_705e`
+- dump 判别值：**没有挪位**。`HeapData::HostObject` 与 `Type::HostObject` 仍各是自己枚举的最后一个，上游这轮没往这两个枚举加尾部变体。
+  - 上游 `f2219003` 把 dump 从 postcard 换成 CBOR、`432df4c3` 给热 dump 类型加一字母 serde 名。连带的口径变化：`HeapData` 现在**按变体名标记**（不再靠下标顺序），所以 fork 追加尾巴不再影响已存 dump 的解码。`Type` 指纹也因此改成按名算
+  - `DUMP_VERSION` 跟上游升到 13（上游自己升的，fork 侧只是追加尾巴，没有额外升版）。旧 fork dump（v12）按上游规则被拒
+- 生成物没手拼：`.proto` 里 fork 的 `HostModuleSource`（`Feed` 的字段 6）自动合上后跑 `make generate-proto` 重生，产物与自动合并结果逐字一致（`git diff` 为空）
+- 本机已知红（**与本次合并无关**）：`cargo test -p monty --test heap_reader_compile_fail` 七条全红。原因是该测试的 `normalize_stderr` 只滤 `warning:` 开头的行，新版 cargo 的清单 lint（`unused_workspace_dependencies`、`manual_readme`、`redundant_homepage`、`non_kebab_case_bins`…）是多行输出，续行没被滤掉。已用 `git worktree` 在 pre-merge 的 `78c2a67d` 上复现同一处红，是环境问题，不是合并引入
+- merge commit `524f58e0`。
