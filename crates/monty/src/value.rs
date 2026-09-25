@@ -2,7 +2,7 @@ use std::{
     borrow::Cow,
     cmp::Ordering,
     fmt::{self, Write},
-    mem::{self, discriminant},
+    mem,
     str::FromStr,
 };
 
@@ -18,12 +18,12 @@ use crate::{
     exception_private::{ExcType, ExcTypeExt, RunError, RunResult, SimpleException},
     expressions::CmpOperator,
     fstring::FormatFloat,
-    hash::{HashValue, hash_one, hash_python_long_int},
+    hash::{HashValue, hash_named, hash_one, hash_python_long_int, identity_hash},
     heap::{ContainsHeap, DropWithContext, Heap, HeapData, HeapId, HeapReadOutput},
     heap_data::heap_subscript,
     identity::Identity,
     intern::{BytesId, FunctionId, Interns, LongIntId, StaticStrings, StringId},
-    modules::{ModuleFunctions, itertools::ItertoolsFunctions},
+    modules::ModuleFunctions,
     percent_format::{copy_bytes_template, percent_format, percent_format_bytes},
     resource_checks::check_pow_size,
     types::{
@@ -59,37 +59,53 @@ use crate::{
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) enum Value {
     // Immediate values (stored inline, no heap allocation)
+    #[serde(rename = "U")]
     Undefined,
+    #[serde(rename = "E")]
     Ellipsis,
+    #[serde(rename = "N")]
     NotImplemented,
+    #[serde(rename = "O")]
     None,
+    #[serde(rename = "B")]
     Bool(bool),
+    #[serde(rename = "I")]
     Int(i64),
+    #[serde(rename = "F")]
     Float(f64),
     /// An interned string literal. The StringId references the string in the Interns table.
     /// To get the actual string content, use `interns.get(string_id)`.
+    #[serde(rename = "T")]
     InternString(StringId),
     /// An interned bytes literal. The BytesId references the bytes in the Interns table.
     /// To get the actual bytes content, use `interns.get_bytes(bytes_id)`.
+    #[serde(rename = "R")]
     InternBytes(BytesId),
     /// An interned long integer literal. The `LongIntId` references the `BigInt` in the Interns table.
     /// Used for integer literals exceeding i64 range. Converted to heap-allocated `LongInt` on load.
+    #[serde(rename = "L")]
     InternLongInt(LongIntId),
     /// A builtin function or exception type
+    #[serde(rename = "A")]
     Builtin(Builtins),
     /// A function from a module (not a global builtin).
     /// Module functions require importing a module to access (e.g., `asyncio.gather`).
+    #[serde(rename = "M")]
     ModuleFunction(ModuleFunctions),
     /// A function defined in the module (not a closure, doesn't capture any variables)
+    #[serde(rename = "D")]
     DefFunction(FunctionId),
     /// A marker value representing special objects like sys.stdout/stderr.
     /// These exist but have minimal functionality in the sandboxed environment.
+    #[serde(rename = "K")]
     Marker(Marker),
     /// A property descriptor that computes its value when accessed.
     /// When retrieved via `py_getattr`, the property's getter is invoked.
+    #[serde(rename = "P")]
     Property(Property),
 
     // Heap-allocated values (stored in arena)
+    #[serde(rename = "C")]
     Ref(HeapId),
 
     /// Sentinel value indicating this Value was properly cleaned up via `drop_with`.
@@ -97,6 +113,7 @@ pub(crate) enum Value {
     /// correctness - if a `Ref` variant is dropped without calling `drop_with`, the
     /// Drop impl will panic.
     #[cfg(feature = "memory-model-checks")]
+    #[serde(rename = "G")]
     Dereferenced,
 }
 
@@ -1697,18 +1714,24 @@ impl Value {
             // NamedTuple/FrozenSet/Path) carry an inline `cached_hash`;
             // cheap-to-hash types recompute each call.
             Self::Ref(id) => vm.heap.read(*id).py_hash(vm),
-            // Singleton values hash by discriminant
-            Self::Undefined | Self::Ellipsis | Self::NotImplemented | Self::None => {
-                Ok(Some(hash_one(discriminant(self))))
-            }
-            Self::Builtin(b) => Ok(Some(hash_one(b))),
-            Self::ModuleFunction(mf) => Ok(Some(hash_one(mf))),
+            // Values with no heap identity hash by name, never by discriminant:
+            // dict and set entries persist their hash, so a hash tied to an
+            // enum's declaration order would break lookups in older dumps.
+            Self::Undefined => Ok(Some(hash_named("singleton", "Undefined"))),
+            Self::Ellipsis => Ok(Some(hash_named("singleton", "Ellipsis"))),
+            Self::NotImplemented => Ok(Some(hash_named("singleton", "NotImplemented"))),
+            Self::None => Ok(Some(hash_named("singleton", "None"))),
+            Self::Builtin(Builtins::Function(function)) => Ok(Some(hash_named("builtin", (*function).into()))),
+            Self::Builtin(Builtins::ExcType(exc_type)) => Ok(Some(hash_named("type", (*exc_type).into()))),
+            // an instance's class is a heap object, hashed by identity like its instances
+            Self::Builtin(Builtins::Type(Type::Instance(class_id))) => Ok(Some(identity_hash(*class_id))),
+            Self::Builtin(Builtins::Type(ty)) => Ok(Some(hash_named("type", &ty.name(vm.heap, vm.interns)))),
+            // the `Debug` form carries the module too, so `time.sleep` and `asyncio.sleep` differ
+            Self::ModuleFunction(function) => Ok(Some(hash_named("module_function", &format!("{function:?}")))),
             // Hash functions based on function ID
             Self::DefFunction(f_id) => Ok(Some(hash_one(f_id))),
-            // Markers are hashable based on their discriminant
-            Self::Marker(m) => Ok(Some(hash_one(m))),
-            // Properties are hashable based on their OS function discriminant
-            Self::Property(p) => Ok(Some(hash_one(p))),
+            Self::Marker(marker) => Ok(Some(hash_named("marker", marker.0.into()))),
+            Self::Property(property) => Ok(Some(hash_named("property", property.name()))),
             #[cfg(feature = "memory-model-checks")]
             Self::Dereferenced => panic!("Cannot access Dereferenced object"),
         }
@@ -1780,44 +1803,14 @@ impl Value {
                     return Ok(call_result);
                 }
             }
+            // Type objects (`list`, `date`, `chain`) answer for themselves:
+            // `__name__`, class constants and the members handed out as values
+            // all live with the type, including the `AttributeError`.
             Self::Builtin(Builtins::Type(t)) => {
-                // Handle type object attributes like __name__
-                let is_dunder_name = attr.static_string(vm.interns).map_or_else(
-                    || attr.as_str(vm.interns) == "__name__",
-                    |ss| ss == StaticStrings::DunderName,
-                );
-                if is_dunder_name {
-                    return Ok(CallResult::Value(allocate_string(
-                        t.dunder_name(vm.heap, vm.interns),
-                        vm.heap,
-                    )));
-                }
-                let t = *t;
-                if let Some(constant) = t.class_constant(attr, vm) {
-                    return Ok(CallResult::Value(constant));
-                }
-                // `chain.from_iterable`, the one attribute an `itertools`
-                // type carries. Handed out as a value so it can be bound and
-                // called later, not only called in place.
-                if t == Type::ItertoolsChain && attr.static_string(vm.interns) == Some(StaticStrings::FromIterable) {
-                    return Ok(CallResult::Value(Self::ModuleFunction(ModuleFunctions::Itertools(
-                        ItertoolsFunctions::ChainFromIterable,
-                    ))));
-                }
-                // `object.__setattr__` is the only member `object` carries: it
-                // exists so a class that hooks attribute writes has a way to
-                // perform one (see `limitations/classes.md`).
-                if t == Type::Object && attr.as_str(vm.interns) == "__setattr__" {
-                    return Ok(CallResult::Value(Self::Builtin(Builtins::Function(
-                        BuiltinsFunctions::ObjectSetattr,
-                    ))));
-                }
-                // CPython names the class rather than the metaclass here:
-                // `type object 'list' has no attribute 'nonexistent'`.
-                return Err(ExcType::attribute_error_type(
-                    &t.name(vm.heap, vm.interns),
-                    attr.as_str(vm.interns),
-                ));
+                return match t.class_getattr(attr, vm) {
+                    Some(value) => Ok(CallResult::Value(value)),
+                    None => Err(t.attribute_error(attr, vm)),
+                };
             }
             _ => {}
         }

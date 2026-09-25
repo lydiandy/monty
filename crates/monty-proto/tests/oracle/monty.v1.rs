@@ -420,6 +420,19 @@ pub struct CodeLoc {
     #[prost(uint32, tag = "2")]
     pub column: u32,
 }
+/// Where the expression that suspended execution is in the source. `filename`
+/// names the source as a traceback frame does: `<python-input-N>` for the
+/// session's N-th feed, or `<string>` inside an `eval()` / `exec()` string.
+/// `start` and `end` are UTF-8 byte offsets into that source, `end` exclusive.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SourceRange {
+    #[prost(string, tag = "1")]
+    pub filename: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "2")]
+    pub start: u32,
+    #[prost(uint32, tag = "3")]
+    pub end: u32,
+}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StackFrame {
     #[prost(string, tag = "1")]
@@ -767,6 +780,10 @@ pub struct Configure {
     /// with parent-serviced sleeps capped at 10s. `Load` restores the dump's settings.
     #[prost(message, optional, tag = "11")]
     pub os_policy: ::core::option::Option<OsPolicy>,
+    /// Relay-only: whether a serving relay may store the session. Children ignore
+    /// it.
+    #[prost(enumeration = "Persistence", tag = "12")]
+    pub persistence: i32,
 }
 /// Executes one snippet against the session. Turn ends with `Complete`,
 /// `Error`, `TypingError`, or a suspension event.
@@ -860,16 +877,21 @@ pub struct ResumeFutures {
     pub values: ::core::option::Option<Arena>,
 }
 /// Requests an opaque serialized snapshot of the current session state
-/// (idle or suspended). The child stays usable afterwards. The bytes carry
-/// monty's own dump format, versioned independently of this schema, and can
-/// only be restored via `Load` by a child built with the same dump version.
+/// (idle or suspended). The session stays usable afterwards. The byte payload
+/// format is at the discretion of the remote (e.g. it may be an ID or a full dump
+/// of state). A relay without session storage answers `Error` and the session
+/// carries on.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Dump {}
 /// Restores state produced by `Dump`. Valid only from no session. If
 /// the restored state was suspended, the child re-emits the suspension event so
-/// the parent learns the resume point; otherwise it replies `Ok`.
+/// the parent learns the resume point; otherwise it replies `Ok`. A relay
+/// without session storage answers `Error` and the session carries on.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Load {
+    /// Either:
+    /// - Dump bytes, or
+    /// - A previously named session ID from `ChildEvent::session_id`
     #[prost(bytes = "vec", tag = "1")]
     pub state: ::prost::alloc::vec::Vec<u8>,
 }
@@ -941,6 +963,12 @@ pub struct ChildEvent {
     /// on a successful `Load` reply; unset on all other events.
     #[prost(string, optional, tag = "23")]
     pub restored_script_name: ::core::option::Option<::prost::alloc::string::String>,
+    /// The session this connection now holds, set only by a remote that stores
+    /// sessions, on its first reply to `Configure` or `Load` whatever that
+    /// reply's kind. Unset for ephemeral sessions or for remotes that don't
+    /// support persistence.
+    #[prost(bytes = "vec", optional, tag = "28")]
+    pub session_id: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
     #[prost(oneof = "child_event::Kind", tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12")]
     pub kind: ::core::option::Option<child_event::Kind>,
 }
@@ -1022,6 +1050,10 @@ pub struct FunctionCall {
     /// twice crosses once.
     #[prost(message, optional, tag = "7")]
     pub values: ::core::option::Option<Arena>,
+    /// Where the call expression is in the source. Absent from a child that
+    /// predates the field; the parent then reports an empty range at offset 0.
+    #[prost(message, optional, tag = "8")]
+    pub position: ::core::option::Option<SourceRange>,
 }
 /// Suspension: the sandbox performed an OS operation, surfaced for the parent
 /// to service (e.g. from a mount) or answer with `ResumeCall`. One typed arm
@@ -1049,6 +1081,9 @@ pub struct OsCall {
     /// call a future may answer at all.
     #[prost(bool, tag = "51")]
     pub allow_eager_await: bool,
+    /// Where the call expression is in the source; absent as on `FunctionCall`.
+    #[prost(message, optional, tag = "52")]
+    pub position: ::core::option::Option<SourceRange>,
     #[prost(
         oneof = "os_call::Call",
         tags = "2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30"
@@ -1257,6 +1292,10 @@ pub struct NameLookup {
     /// a class type (a lazy class attribute): the uuid of the receiver.
     #[prost(message, optional, tag = "2")]
     pub object_id: ::core::option::Option<Uuid>,
+    /// Where the name (or attribute access) is in the source; absent as on
+    /// `FunctionCall`.
+    #[prost(message, optional, tag = "3")]
+    pub position: ::core::option::Option<SourceRange>,
 }
 /// Suspension: every sandbox task is blocked on external futures previously
 /// registered via `ExtFunctionResult.future`. Answer with `ResumeFutures`.
@@ -1264,6 +1303,10 @@ pub struct NameLookup {
 pub struct ResolveFutures {
     #[prost(uint32, repeated, tag = "1")]
     pub pending_call_ids: ::prost::alloc::vec::Vec<u32>,
+    /// Where the main task's blocked `await` is in the source; absent as on
+    /// `FunctionCall`.
+    #[prost(message, optional, tag = "2")]
+    pub position: ::core::option::Option<SourceRange>,
 }
 /// Turn end: the snippet completed with this value. The session is ready for
 /// the next `Feed`.
@@ -1319,9 +1362,10 @@ pub struct FatalError {
 /// hand back.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ShutdownDump {
-    /// Session state captured immediately before shutdown (same bytes as
-    /// `DumpResult.state`), restorable into a fresh worker via `Load`. Absent
-    /// when there was no session yet or the dump itself failed.
+    /// What `Load` restores the session from on a fresh connection: the ID a
+    /// relay with session storage parked it under. Absent when there is nothing
+    /// to load: no session yet, an ephemeral session, a relay without storage, or
+    /// a park that failed.
     #[prost(bytes = "vec", optional, tag = "1")]
     pub dump: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
 }
@@ -1363,6 +1407,39 @@ impl TypeOrigin {
             "TYPE_ORIGIN_BUILTIN" => Some(Self::Builtin),
             "TYPE_ORIGIN_SANDBOX" => Some(Self::Sandbox),
             "TYPE_ORIGIN_HOST" => Some(Self::Host),
+            _ => None,
+        }
+    }
+}
+/// How a serving relay treats the session's state; children ignore it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum Persistence {
+    /// The relay's default.
+    Unspecified = 0,
+    /// Never stored by the relay on its own: no session ID and never parked.
+    Ephemeral = 1,
+    /// Parked on idle, drain or disconnect, and loadable by its session ID.
+    Stored = 2,
+}
+impl Persistence {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "PERSISTENCE_UNSPECIFIED",
+            Self::Ephemeral => "PERSISTENCE_EPHEMERAL",
+            Self::Stored => "PERSISTENCE_STORED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "PERSISTENCE_UNSPECIFIED" => Some(Self::Unspecified),
+            "PERSISTENCE_EPHEMERAL" => Some(Self::Ephemeral),
+            "PERSISTENCE_STORED" => Some(Self::Stored),
             _ => None,
         }
     }

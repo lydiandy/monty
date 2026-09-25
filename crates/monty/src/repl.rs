@@ -14,7 +14,7 @@ use std::{mem, sync::Arc};
 use ahash::AHashMap;
 use monty_types::{
     CallArgs, ExcType, MontyException, MontyObject, MontyUuid, NamedValues, OsFunctionCall, OsPolicy, PrintWriter,
-    ResourceTracker, SOURCE_SCAN_THRESHOLD,
+    ResourceTracker, SOURCE_SCAN_THRESHOLD, SourceRange,
     unstable::{self, MontyGraph, NodeId},
 };
 use ruff_python_ast::token::TokenKind;
@@ -76,15 +76,12 @@ pub struct MontyRepl {
     /// `CodeRange` byte offsets that index into snippet M's source, so the
     /// diagnostic pass must be able to look that source up by filename —
     /// the current snippet's `Executor.code` is not sufficient.
-    #[serde(default)]
     sources: AHashMap<String, Arc<str>>,
     /// [`CompileOptions`] applied to every snippet fed to this session, fixed
     /// at construction so all snippets compile consistently.
-    #[serde(default)]
     options: CompileOptions,
     /// OS-call policies shared with each snippet's executor.
     /// See [`with_os_policy`](Self::with_os_policy).
-    #[serde(default)]
     os_policy: Arc<OsPolicy>,
     /// Sandbox working directory the next snippet starts in: what
     /// [`set_cwd`](Self::set_cwd) chose, then whatever `os.chdir` left the
@@ -783,6 +780,8 @@ pub struct ReplFunctionCall {
     pub object_id: Option<MontyUuid>,
     /// The host may await a coroutine and answer with [`Self::resume_eager`].
     pub allow_eager_await: bool,
+    /// Where the call expression is in the source.
+    pub position: SourceRange,
     /// Internal REPL execution snapshot.
     snapshot: ReplSnapshot,
 }
@@ -848,6 +847,8 @@ pub struct ReplOsCall {
     /// The host may await its wait and answer with [`Self::resume_eager`];
     /// see [`OsCall::allow_eager_await`](crate::OsCall::allow_eager_await).
     pub allow_eager_await: bool,
+    /// Where the call expression is in the source.
+    pub position: SourceRange,
     /// Internal REPL execution snapshot.
     snapshot: ReplSnapshot,
 }
@@ -921,6 +922,8 @@ impl ReplOsCall {
 pub struct ReplNameLookup {
     /// The name being looked up.
     pub name: String,
+    /// Where the name (or attribute access) is in the source.
+    pub position: SourceRange,
     /// Where the resolved value lands (namespace slot or host attribute).
     scope: LookupScope,
     /// Internal REPL execution snapshot.
@@ -956,7 +959,9 @@ impl ReplNameLookup {
     /// `AttributeError`. `Error` raises the host's exception in the sandbox,
     /// bypassing any `hasattr()` / `getattr()` default.
     pub fn resume(self, result: NameLookupResult, print: PrintWriter<'_>) -> Result<ReplProgress, Box<ReplStartError>> {
-        let Self { name, scope, snapshot } = self;
+        let Self {
+            name, scope, snapshot, ..
+        } = self;
 
         let ReplSnapshot {
             mut repl,
@@ -1016,6 +1021,8 @@ pub struct ReplResolveFutures {
     vm_state: VMSnapshot,
     /// Pending call IDs expected by this snapshot.
     pending_call_ids: Vec<u32>,
+    /// Where the main task's blocked `await` is in the source.
+    position: SourceRange,
 }
 
 impl ReplResolveFutures {
@@ -1050,6 +1057,12 @@ impl ReplResolveFutures {
         &self.pending_call_ids
     }
 
+    /// Returns where the main task's blocked `await` is in the source.
+    #[must_use]
+    pub fn position(&self) -> &SourceRange {
+        &self.position
+    }
+
     /// Aborts with an uncatchable exception and abandons pending futures.
     pub fn abort(self, exc: MontyException, print: PrintWriter<'_>) -> Result<ReplProgress, Box<ReplStartError>> {
         let Self {
@@ -1079,6 +1092,7 @@ impl ReplResolveFutures {
             mut executor,
             vm_state,
             pending_call_ids,
+            ..
         } = self;
 
         let invalid_call_id = results
@@ -1425,32 +1439,41 @@ fn build_repl_progress(
             call_id,
             object_id,
             allow_eager_await,
+            position,
         } => Ok(ReplProgress::FunctionCall(ReplFunctionCall {
             function_name,
             args,
             call_id,
             object_id,
             allow_eager_await,
+            position,
             snapshot: new_repl_snapshot!(),
         })),
         ConvertedExit::OsCall {
             function_call,
             call_id,
             allow_eager_await,
+            position,
         } => Ok(ReplProgress::OsCall(ReplOsCall {
             function_call,
             call_id,
             allow_eager_await,
+            position,
             snapshot: new_repl_snapshot!(),
         })),
-        ConvertedExit::ResolveFutures(pending_call_ids) => Ok(ReplProgress::ResolveFutures(ReplResolveFutures {
+        ConvertedExit::ResolveFutures {
+            pending_call_ids,
+            position,
+        } => Ok(ReplProgress::ResolveFutures(ReplResolveFutures {
             repl,
             executor,
             vm_state: vm_state.expect("snapshot should exist for ResolveFutures"),
             pending_call_ids,
+            position,
         })),
-        ConvertedExit::NameLookup { name, scope } => Ok(ReplProgress::NameLookup(ReplNameLookup {
+        ConvertedExit::NameLookup { name, scope, position } => Ok(ReplProgress::NameLookup(ReplNameLookup {
             name,
+            position,
             scope,
             snapshot: new_repl_snapshot!(),
         })),

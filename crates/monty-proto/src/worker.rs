@@ -30,7 +30,7 @@ use monty_type_checking::{SourceFile, TypeChecker};
 use monty_types::{
     AssertMessageAnnotations, CompileOptions, ExcType, ExtFunctionResult, MontyException, MontyObject, OsFunctionCall,
     OsPolicy, PrintStream, PrintWriter, PrintWriterCallback, ResourceLimits, ResourceTracker, SOURCE_SCAN_THRESHOLD,
-    TypeCheckState, TypeCheckingConfig,
+    TypeCheckState, TypeCheckingConfig, allocate_into_baseline,
 };
 
 use super::{
@@ -207,7 +207,10 @@ pub struct Child {
     /// Script name of the current session (used for error and type-check
     /// diagnostics).
     script_name: String,
-    type_checker: TypeChecker,
+    /// Built by the first type-checked feed and kept for the worker's life; what
+    /// building it allocates joins the baseline rather than that session's budget.
+    /// What its first run caches is charged to the session, as it always was.
+    type_checker: Option<TypeChecker>,
     /// `Some` when the session was created with `type_check: true`.
     type_check: Option<TypeCheckState>,
     /// How long [`ProtoPrint`] may hold buffered output, from the session's
@@ -223,7 +226,7 @@ impl Default for Child {
         Self {
             state: SessionState::Configured(None),
             script_name: String::new(),
-            type_checker: TypeChecker::default(),
+            type_checker: None,
             type_check: None,
             print_flush_interval: DEFAULT_PRINT_FLUSH_INTERVAL,
             os_policy: OsPolicy::default(),
@@ -505,6 +508,8 @@ impl Child {
             print_flush_interval_ms: _,
             // validated and stored when the `Configure` arrived
             os_policy: _,
+            // a relay's concern; the child never stores sessions
+            persistence: _,
         } = *config;
         let limits = limits.unwrap_or_default().into();
         self.script_name = script_name;
@@ -904,10 +909,10 @@ impl Child {
         let state = self.type_check.as_ref()?;
         let stubs =
             (!state.committed_stubs.is_empty()).then(|| SourceFile::new(&state.committed_stubs, "repl_type_stubs.pyi"));
-        match self
+        let type_checker = self
             .type_checker
-            .run(&SourceFile::new(code, &self.script_name), stubs.as_ref(), state.config)
-        {
+            .get_or_insert_with(|| allocate_into_baseline(TypeChecker::default));
+        match type_checker.run(&SourceFile::new(code, &self.script_name), stubs.as_ref(), state.config) {
             Ok(None) => None,
             Ok(Some(diagnostics)) => Some(event(pb::child_event::Kind::TypingError(pb::TypingError {
                 diagnostics: diagnostics.to_string(),
@@ -927,7 +932,7 @@ impl Child {
         self.script_name = String::new();
         self.print_flush_interval = DEFAULT_PRINT_FLUSH_INTERVAL;
         self.os_policy = OsPolicy::default();
-        self.type_checker.reset()
+        self.type_checker.as_mut().map_or(Ok(()), TypeChecker::reset)
     }
 }
 
@@ -1027,6 +1032,7 @@ fn suspension_event_function_call(call: &mut monty::ReplFunctionCall) -> pb::Chi
         call.call_id,
         call.object_id,
         call.allow_eager_await,
+        call.position.clone(),
     )))
 }
 
@@ -1041,6 +1047,7 @@ fn suspension_event_os_call(call: &mut monty::ReplOsCall) -> pb::ChildEvent {
         call.call_id,
         function_call,
         call.allow_eager_await,
+        &call.position,
     )))
 }
 
@@ -1059,9 +1066,11 @@ fn suspension_event(progress: &mut ReplProgress) -> pb::ChildEvent {
         ReplProgress::NameLookup(lookup) => event(pb::child_event::Kind::NameLookup(pb::NameLookup {
             name: lookup.name.clone(),
             object_id: lookup.object_id().as_ref().map(uuid_to_pb),
+            position: Some((&lookup.position).into()),
         })),
         ReplProgress::ResolveFutures(state) => event(pb::child_event::Kind::ResolveFutures(pb::ResolveFutures {
             pending_call_ids: state.pending_call_ids().to_vec().into(),
+            position: Some(state.position().into()),
         })),
         ReplProgress::Complete { .. } => unreachable!("Complete is handled before suspension_event"),
     }

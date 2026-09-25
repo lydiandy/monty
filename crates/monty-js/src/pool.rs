@@ -31,13 +31,13 @@ use std::{
 
 use monty_pool::{
     telemetry::{TelemetryAdapterHandle, TelemetryContext},
-    Checkout, CheckoutOptions, MountSpec, MountSpecMode, OnPrint, Pool, PoolConfig, PoolError, PrintFuture, ReplConfig,
-    ResumeValue, TurnEvent,
+    Checkout, CheckoutOptions, MountSpec, MountSpecMode, OnPrint, Persistence, Pool, PoolConfig, PoolError,
+    PrintFuture, ReplConfig, ResumeValue, TurnEvent,
 };
 use monty_types::{
     unstable::{self, NodeId},
     AssertMessageAnnotations, ExcType, MontyException, MontyObject, NameLookupResult, NamedValues, PrintStream,
-    StackFrame, TypeCheckingConfig, TypeCheckingFormat,
+    SourceRange, StackFrame, TypeCheckingConfig, TypeCheckingFormat,
 };
 use napi::{
     bindgen_prelude::{
@@ -49,7 +49,7 @@ use napi::{
 };
 use napi_derive::napi;
 use opentelemetry::{trace::TraceContextExt, Context};
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{watch, Mutex as AsyncMutex};
 
 use crate::{
     convert::{js_to_monty, monty_to_js, DecodedArena, GraphEncoder},
@@ -234,6 +234,8 @@ impl NativeMountDir {
 pub struct NativePool {
     config: PoolConfig,
     pool: SharedPool,
+    /// Cancels pending checkouts without interrupting sessions already checked out.
+    closing: watch::Sender<bool>,
 }
 
 #[napi]
@@ -272,6 +274,7 @@ impl NativePool {
         Ok(Self {
             config,
             pool: Arc::new(Mutex::new(None)),
+            closing: watch::channel(false).0,
         })
     }
 
@@ -294,6 +297,7 @@ impl NativePool {
         let os_policy = extract_os_policy(&options)?;
         Ok(NativeSession {
             pool: Arc::clone(&self.pool),
+            closing: self.closing.subscribe(),
             repl_config: ReplConfig {
                 script_name: options.script_name,
                 limits,
@@ -315,15 +319,18 @@ impl NativePool {
                     .map(|ms| duration_from_ms("printFlushInterval", ms))
                     .transpose()?,
                 os_policy,
+                // only a serving relay stores sessions; its default applies
+                persistence: Persistence::ServerDefault,
             },
             checkout: Arc::new(AsyncMutex::new(None)),
         })
     }
 
-    /// Shuts the pool down: idle workers exit, capacity is gone. Sessions
-    /// still checked out keep their workers until they finish.
+    /// Cancels pending checkouts and shuts idle workers down. Sessions
+    /// already checked out keep their workers until they finish.
     #[napi]
     pub fn close<'env>(&self, env: &'env Env) -> Result<PromiseRaw<'env, ()>> {
+        self.closing.send_replace(true);
         let slot = Arc::clone(&self.pool);
         env.spawn_future(async move {
             let pool = lock(&slot).take();
@@ -374,6 +381,8 @@ impl NativeTelemetryContext {
 #[napi(js_name = "NativeSession")]
 pub struct NativeSession {
     pool: SharedPool,
+    /// Observes closure while waiting to acquire a worker; unused after entry.
+    closing: watch::Receiver<bool>,
     repl_config: ReplConfig,
     checkout: SharedCheckout,
 }
@@ -390,22 +399,30 @@ impl NativeSession {
         telemetry_context: Option<NativeTelemetryContext>,
     ) -> Result<PromiseRaw<'env, ()>> {
         let pool = Arc::clone(&self.pool);
+        let mut closing = self.closing.clone();
         let repl_config = self.repl_config.clone();
         let slot = Arc::clone(&self.checkout);
         let telemetry_context =
             telemetry_context.and_then(|context| configured_tracing_adapter().map(|adapter| context.parse(adapter)));
         env.spawn_future(async move {
-            let pool = lock(&pool)
-                .as_ref()
-                .map(Arc::clone)
-                .ok_or_else(|| invalid("the pool is not started — create it with Monty.create()"))?;
-            let checkout = pool
-                .checkout_with(
-                    &repl_config,
-                    CheckoutOptions::default().with_telemetry(telemetry_context),
-                )
-                .await
-                .map_err(pool_error)?;
+            let checkout = tokio::select! {
+                biased;
+                _ = closing.wait_for(|closed| *closed) => {
+                    return Err(invalid("the pool is closed — create a new Monty pool"));
+                }
+                checkout = async {
+                    let pool = lock(&pool)
+                        .as_ref()
+                        .map(Arc::clone)
+                        .ok_or_else(|| invalid("the pool is not started — create it with Monty.create()"))?;
+                    pool.checkout_with(
+                        &repl_config,
+                        CheckoutOptions::default().with_telemetry(telemetry_context),
+                    )
+                    .await
+                    .map_err(pool_error)
+                } => checkout?,
+            };
             *slot.lock().await = Some(checkout);
             Ok(())
         })
@@ -741,6 +758,13 @@ impl NativeSession {
         })
     }
 
+    /// Pool-assigned identity, captured by the JS session before it starts any turns.
+    #[must_use]
+    #[napi(getter)]
+    pub fn worker_id(&self) -> Option<f64> {
+        self.checkout.try_lock().ok()?.as_ref()?.worker_id().map(|id| id as f64)
+    }
+
     /// OS process id of this session's worker, or `null` when no worker is
     /// attached or a turn is in flight (the turn thread holds the checkout
     /// lock — blocking the event loop on it would deadlock with the print
@@ -909,8 +933,10 @@ fn turn_to_js(env: &Env, (outcome, context): (TurnOutcome, Option<String>)) -> R
             call_id,
             object_id,
             allow_eager_await,
+            position,
         }) => {
             obj.set("kind", "functionCall")?;
+            obj.set("position", source_range_to_js(env, &position)?)?;
             obj.set("allowEagerAwait", allow_eager_await)?;
             obj.set("functionName", function_name)?;
             let (graph, arg_ids, kwarg_ids) = unstable::call_args_parts(&args);
@@ -927,8 +953,10 @@ fn turn_to_js(env: &Env, (outcome, context): (TurnOutcome, Option<String>)) -> R
             call_id,
             allow_eager_await,
             system_sleep,
+            position,
         }) => {
             obj.set("kind", "osCall")?;
+            obj.set("position", source_range_to_js(env, &position)?)?;
             obj.set("functionName", function_name)?;
             if let Some(delay) = system_sleep {
                 obj.set("systemSleepSecs", delay.as_secs_f64())?;
@@ -940,15 +968,24 @@ fn turn_to_js(env: &Env, (outcome, context): (TurnOutcome, Option<String>)) -> R
             obj.set("callId", call_id)?;
             obj.set("allowEagerAwait", allow_eager_await)?;
         }
-        TurnOutcome::Event(TurnEvent::NameLookup { name, object_id }) => {
+        TurnOutcome::Event(TurnEvent::NameLookup {
+            name,
+            object_id,
+            position,
+        }) => {
             obj.set("kind", "nameLookup")?;
             obj.set("name", name)?;
             // the receiver uuid as a canonical string
             obj.set("objectId", object_id.map(|uuid| uuid.to_string()))?;
+            obj.set("position", source_range_to_js(env, &position)?)?;
         }
-        TurnOutcome::Event(TurnEvent::ResolveFutures { pending_call_ids }) => {
+        TurnOutcome::Event(TurnEvent::ResolveFutures {
+            pending_call_ids,
+            position,
+        }) => {
             obj.set("kind", "resolveFutures")?;
             obj.set("pendingCallIds", pending_call_ids)?;
+            obj.set("position", source_range_to_js(env, &position)?)?;
         }
         TurnOutcome::Runtime(exc) => {
             obj.set("kind", "error")?;
@@ -1025,6 +1062,15 @@ fn exception_to_js<'env>(env: &'env Env, exc: &MontyException) -> Result<Object<
         array.set(i, frame_to_js(env, frame)?)?;
     }
     obj.set("frames", array)?;
+    Ok(obj)
+}
+
+/// Builds the `position` object of a suspension turn (`SourceRange` in `ts/errors.ts`).
+fn source_range_to_js<'env>(env: &'env Env, range: &SourceRange) -> Result<Object<'env>> {
+    let mut obj = Object::new(env)?;
+    obj.set("filename", range.filename.as_str())?;
+    obj.set("start", range.start)?;
+    obj.set("end", range.end)?;
     Ok(obj)
 }
 

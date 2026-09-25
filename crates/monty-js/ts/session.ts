@@ -28,6 +28,7 @@ import {
   MontyTypingError,
   notCallableMessage,
   ProtocolError,
+  type SourceRange,
 } from './errors.js'
 import { PYTHON_EXC_NAMES } from './errors.js'
 import { mountsToNative } from './mount.js'
@@ -186,12 +187,15 @@ interface PendingFuture {
 }
 
 /**
- * One worker process dedicated to one REPL session; created by
+ * One worker dedicated to one REPL session; created by
  * [`Monty.checkout`]. Session state (globals, functions) persists across
  * `feedRun` calls. Close it (or `await using`) to return the worker to the
  * pool.
  */
 export class MontySession {
+  /** Stable worker identity within its pool, retained during turns and after session close. */
+  readonly workerId: number | undefined
+
   private readonly native: NativeSession
   /** Set once the session is unusable: crashed worker or protocol error. */
   private broken: Error | null = null
@@ -207,6 +211,7 @@ export class MontySession {
   /** @internal — sessions are created by `Monty.checkout`. */
   constructor(native: NativeSession) {
     this.native = native
+    this.workerId = native.workerId ?? undefined
   }
 
   /**
@@ -840,7 +845,11 @@ class PrintTarget {
       return
     }
     if (this.callback === undefined) {
-      ;(stream === 'stdout' ? process.stdout : process.stderr).write(text)
+      if (typeof process !== 'undefined' && process.stdout && process.stderr) {
+        ;(stream === 'stdout' ? process.stdout : process.stderr).write(text)
+      } else {
+        ;(stream === 'stdout' ? console.log : console.error)(text)
+      }
       return
     }
     try {
@@ -1055,6 +1064,8 @@ export class FunctionSnapshot extends SingleUse {
    *  instance, or a class type (a classmethod, or `__call__` construction).
    *  The receiver is not in `args`; `null` for plain external calls. */
   readonly objectId: string | null
+  /** Where the call expression is in the source. */
+  readonly position: SourceRange
 
   /** @internal */
   constructor(
@@ -1063,6 +1074,7 @@ export class FunctionSnapshot extends SingleUse {
     isOsFunction: boolean,
   ) {
     super(turn.callbackSpanKey, driver.traceBaseContext)
+    this.position = turn.position
     this.functionName = turn.functionName
     const [args, kwargs] = restoreCallArgs(turn, driver.instances)
     this.args = args
@@ -1132,6 +1144,8 @@ export class NameLookupSnapshot extends SingleUse {
    *  instance, or a class type): the receiver's store uuid. `null` for
    *  plain name lookups. */
   readonly objectId: string | null
+  /** Where the name (or attribute access) is in the source. */
+  readonly position: SourceRange
 
   /** @internal */
   constructor(
@@ -1139,6 +1153,7 @@ export class NameLookupSnapshot extends SingleUse {
     private readonly turn: NameLookupTurn,
   ) {
     super(turn.callbackSpanKey, driver.traceBaseContext)
+    this.position = turn.position
     this.variableName = turn.name
     this.objectId = turn.objectId ?? null
   }
@@ -1179,6 +1194,8 @@ export class NameLookupSnapshot extends SingleUse {
 /** A paused execution where every sandbox task is blocked on external futures. */
 export class FutureSnapshot extends SingleUse {
   readonly pendingCallIds: number[]
+  /** Where the main task's blocked `await` is in the source. */
+  readonly position: SourceRange
 
   /** @internal */
   constructor(
@@ -1186,6 +1203,7 @@ export class FutureSnapshot extends SingleUse {
     private readonly turn: ResolveFuturesTurn,
   ) {
     super(turn.callbackSpanKey, driver.traceBaseContext)
+    this.position = turn.position
     this.pendingCallIds = turn.pendingCallIds
   }
 

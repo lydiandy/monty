@@ -21,7 +21,7 @@ use std::{borrow::Cow, mem};
 pub(crate) use attr::PendingLookupEffect;
 pub(crate) use call::CallResult;
 pub(crate) use collections::unpack_exact;
-use monty_types::{InvalidInputError, MontyObject, MontyUuid, OsFunctionCall, PrintWriter};
+use monty_types::{InvalidInputError, MontyObject, MontyUuid, OsFunctionCall, PrintWriter, SourceRange};
 pub(crate) use namespace::{FrameNamespace, function_namespace};
 pub(crate) use recursion::{ContainsVM, RecursionToken, RunReentryGuard};
 use scheduler::Scheduler;
@@ -420,6 +420,16 @@ pub(super) fn stack_index(index: usize) -> u32 {
     u32::try_from(index).expect("VM stack index exceeds u32")
 }
 
+/// The code a saved frame runs: its function's, or `module_code` for the
+/// module-level frame, which has no function ID.
+pub(super) fn frame_code<'code>(
+    interns: &'code Interns,
+    module_code: &'code Code,
+    function_id: Option<FunctionId>,
+) -> &'code Code {
+    function_id.map_or(module_code, |id| &interns.get_function(id).code)
+}
+
 impl<'code> CallFrame<'code> {
     /// Creates a new call frame for module-level code.
     ///
@@ -613,23 +623,29 @@ impl CallFrame<'_> {
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct SerializedFrame {
     /// Which function's code this frame executes (None = module-level).
+    #[serde(rename = "F")]
     function_id: Option<FunctionId>,
 
     /// Instruction pointer within this frame's bytecode.
+    #[serde(rename = "P")]
     ip: usize,
 
     /// Base index into the VM stack for this frame's locals region.
+    #[serde(rename = "S")]
     stack_base: usize,
 
     /// Number of local variable slots (0 for module-level frames).
+    #[serde(rename = "L")]
     locals_count: u16,
 
     /// Base index into the VM-wide `exception_stack` for this frame.
     /// See `CallFrame.exception_stack_base`.
+    #[serde(rename = "E")]
     exception_stack_base: usize,
 
     /// Caller's bytecode offset at the call site (for tracebacks). See
     /// `CallFrame.call_offset`.
+    #[serde(rename = "C")]
     call_offset: Option<u32>,
 
     /// Whether this frame is a class `__init__` (see `CallFrame.is_initializer`).
@@ -638,11 +654,12 @@ pub struct SerializedFrame {
     /// across a suspend (an `__init__` that calls an external/OS function), so it
     /// must round-trip — otherwise the resumed frame would push `__init__`'s
     /// `None` instead of leaving the instance on the stack.
-    #[serde(default)]
+    #[serde(rename = "I")]
     is_initializer: bool,
 
     /// Frame namespace, with ownership of its dict references (see
     /// `CallFrame.namespace`).
+    #[serde(rename = "N")]
     namespace: Option<Box<FrameNamespace>>,
 }
 
@@ -710,11 +727,9 @@ pub struct VMSnapshot {
 
     /// In-flight resume effect for the paused OS call, if any. See
     /// [`VM::pending_effect`].
-    #[serde(default)]
     pending_effect: Option<PendingEffect>,
     /// In-flight resume effect for the paused lazy attribute lookup, if any.
     /// See [`VM::pending_lookup_effect`].
-    #[serde(default)]
     pending_lookup_effect: Option<PendingLookupEffect>,
 
     /// Working directory at the pause, including any `os.chdir` so far.
@@ -991,10 +1006,7 @@ impl<'h> VM<'h> {
             .frames
             .into_iter()
             .map(|sf| {
-                let code = match sf.function_id {
-                    Some(func_id) => &interns.get_function(func_id).code,
-                    None => &program.module_code,
-                };
+                let code = frame_code(interns, &program.module_code, sf.function_id);
                 CallFrame {
                     code,
                     bytecode: code.bytecode(),
@@ -2542,6 +2554,46 @@ impl<'h> VM<'h> {
             .location_for_offset(self.instruction_ip)
             .map(LocationEntry::range)
             .unwrap_or_default()
+    }
+
+    /// Returns the position a suspension at the current instruction reports.
+    ///
+    /// `instruction_ip` still names the suspending opcode; its location entry
+    /// gives the byte range, so this reads no source.
+    pub(crate) fn suspension_position(&self) -> SourceRange {
+        self.code_position(self.current_frame.code, self.instruction_ip)
+    }
+
+    /// Returns the source position of the `await` the main task is blocked on.
+    ///
+    /// The position reported when every task is blocked on host futures: the
+    /// blocked main task may be the loaded context, or parked in the scheduler
+    /// with its frames saved while a spawned task ran last.
+    pub(crate) fn main_task_position(&self) -> SourceRange {
+        if self.is_main_task() && !self.current_frame.is_parked {
+            self.suspension_position()
+        } else {
+            // `save_task_context` pushes the executing frame last.
+            self.scheduler
+                .main_task()
+                .and_then(|task| Some((task.frames.last()?, task.instruction_ip)))
+                .map_or_else(SourceRange::unknown, |(frame, ip)| {
+                    self.code_position(frame_code(self.interns, self.module_code, frame.function_id), ip)
+                })
+        }
+    }
+
+    /// The byte range of the instruction at `offset` in `code`, named by its source.
+    fn code_position(&self, code: &Code, offset: usize) -> SourceRange {
+        code.location_for_offset(offset)
+            .map_or_else(SourceRange::unknown, |entry| {
+                let range = entry.range();
+                SourceRange::new(
+                    self.interns.get_filename(range.filename),
+                    range.start_byte,
+                    range.end_byte,
+                )
+            })
     }
 
     /// Captures the caller's current bytecode offset for a call site, or `None`

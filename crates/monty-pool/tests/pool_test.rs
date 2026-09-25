@@ -31,6 +31,8 @@ use monty_pool::{
 // only the unix-gated raw-path test forges worker frames
 #[cfg(unix)]
 use monty_proto::{encode_framed_into, pb};
+#[cfg(unix)]
+use monty_types::SourceRange;
 use monty_types::{
     CallArgs, DateTimeSource, ExcType, MontyException, MontyObject, NameLookupResult, OsPolicy, PrintStream,
     RandomSeed, RandomStart, ResourceLimits, SleepMode, TypeCheckingConfig, TypeCheckingFormat,
@@ -228,6 +230,7 @@ async fn feed_and_finish_reuses_the_worker() {
     let pool = Pool::new(config()).await.unwrap();
     let mut session = pool.checkout(&ReplConfig::default()).await.unwrap();
     let first_pid = session.pid().unwrap();
+    let first_id = session.worker_id().unwrap();
 
     let event = session
         .feed("x = 40\nx + 2", vec![], vec![], false, &mut no_print)
@@ -248,6 +251,7 @@ async fn feed_and_finish_reuses_the_worker() {
     // at NameLookup and resolving it as undefined raises NameError
     let mut session = pool.checkout(&ReplConfig::default()).await.unwrap();
     assert_eq!(session.pid().unwrap(), first_pid);
+    assert_eq!(session.worker_id(), Some(first_id));
     let event = session.feed("x", vec![], vec![], false, &mut no_print).await.unwrap();
     assert!(matches!(event, TurnEvent::NameLookup { name, .. } if name == "x"));
     let err = session
@@ -2181,11 +2185,13 @@ async fn workers_are_recycled_after_max_checkouts() {
 
     let session = pool.checkout(&ReplConfig::default()).await.unwrap();
     let first_pid = session.pid().unwrap();
+    let first_id = session.worker_id().unwrap();
     session.finish().await.unwrap();
     assert_eq!(pool.idle_workers(), 0, "worker must be retired, not pooled");
 
     let session = pool.checkout(&ReplConfig::default()).await.unwrap();
     assert_ne!(session.pid().unwrap(), first_pid);
+    assert_ne!(session.worker_id().unwrap(), first_id);
     session.finish().await.unwrap();
 }
 
@@ -2649,6 +2655,7 @@ async fn a_rewound_feed_clock_cannot_loosen_the_feed_backstop() {
         ..child_event(pb::child_event::Kind::NameLookup(pb::NameLookup {
             name: "x".to_owned(),
             object_id: None,
+            position: Some(position()),
         }))
     };
     // `Ok` answers Configure, then the honest suspension and the rewound one.
@@ -2708,6 +2715,40 @@ async fn a_rewound_feed_clock_cannot_loosen_the_feed_backstop() {
     assert_eq!(timeout, grace);
 }
 
+/// A child that predates the position field announces suspensions without
+/// it; the parent reports an unknown range rather than rejecting them.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_suspension_without_a_position_reads_as_unknown() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut replies = framed(&child_event(pb::child_event::Kind::Ok(pb::Ok {})));
+    replies.extend(framed(&child_event(pb::child_event::Kind::NameLookup(
+        pb::NameLookup {
+            name: "x".to_owned(),
+            object_id: None,
+            position: None,
+        },
+    ))));
+    let replies_path = dir.path().join("replies.bin");
+    fs::write(&replies_path, &replies).unwrap();
+    let fake = write_fake_monty(
+        dir.path(),
+        &format!("#!/bin/sh\ncat '{}'\nsleep 30\n", replies_path.display()),
+    );
+
+    let pool = Pool::new(PoolConfig::subprocess(&fake)).await.unwrap();
+    let mut checkout = pool
+        .checkout(&ReplConfig::default())
+        .await
+        .expect("the stand-in answers Configure with Ok");
+    let event = checkout.feed("x", vec![], vec![], false, &mut no_print).await.unwrap();
+    let TurnEvent::NameLookup { name, position, .. } = event else {
+        panic!("expected a name lookup, got {event:?}");
+    };
+    assert_eq!(name, "x");
+    assert_eq!(position, SourceRange::unknown());
+}
+
 /// A second raw `Feed` restarts the parent's feed clock, as `Checkout::feed`
 /// does — the previous feed's total must not shorten the new feed's backstop.
 ///
@@ -2728,6 +2769,7 @@ async fn a_raw_feed_restarts_the_parent_feed_clock() {
         ..child_event(pb::child_event::Kind::NameLookup(pb::NameLookup {
             name: "x".to_owned(),
             object_id: None,
+            position: Some(position()),
         }))
     }));
     let replies_path = dir.path().join("replies.bin");
@@ -2798,4 +2840,15 @@ async fn a_disabled_grace_leaves_the_sandbox_limit_in_charge() {
     assert_eq!(exc.exc_type().to_string(), "TimeoutError");
     session.finish().await.unwrap();
     assert_eq!(pool.idle_workers(), 1);
+}
+
+/// The suspension position every hand-built event carries; only the
+/// unix-gated forged-frame tests build events.
+#[cfg(unix)]
+fn position() -> pb::SourceRange {
+    pb::SourceRange {
+        filename: "main.py".to_owned(),
+        start: 0,
+        end: 1,
+    }
 }

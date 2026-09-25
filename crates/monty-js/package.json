@@ -1,6 +1,6 @@
 {
   "name": "@pydantic/monty",
-  "version": "1.0.0-beta.2",
+  "version": "1.0.0",
   "type": "module",
   "description": "Python sandbox running in crash-isolated subprocess workers",
   "main": "dist/index.js",
@@ -8,7 +8,7 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "browser": "./dist/worker/index.browser.js",
+      "browser": "./dist/worker/index.js",
       "node": "./dist/node.js",
       "default": "./dist/node.js"
     },
@@ -19,7 +19,6 @@
     "./wasm": {
       "types": "./dist/worker/index.d.ts",
       "node": "./dist/worker/index.node.js",
-      "browser": "./dist/worker/index.browser.js",
       "default": "./dist/worker/index.js"
     }
   },
@@ -105,10 +104,10 @@
     "arrowParens": "always"
   },
   "optionalDependencies": {
-    "@pydantic/monty-darwin-x64": "1.0.0-beta.2",
-    "@pydantic/monty-darwin-arm64": "1.0.0-beta.2",
-    "@pydantic/monty-linux-x64-gnu": "1.0.0-beta.2",
-    "@pydantic/monty-linux-arm64-gnu": "1.0.0-beta.2",
-    "@pydantic/monty-win32-x64-msvc": "1.0.0-beta.2"
+    "@pydantic/monty-darwin-x64": "1.0.0",
+    "@pydantic/monty-darwin-arm64": "1.0.0",
+    "@pydantic/monty-linux-x64-gnu": "1.0.0",
+    "@pydantic/monty-linux-arm64-gnu": "1.0.0",
+    "@pydantic/monty-win32-x64-msvc": "1.0.0"
   }
 }

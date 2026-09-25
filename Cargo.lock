@@ -2466,6 +2466,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "minicbor"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c12b4033ffaa92fbf9df03df38d19324f52bad130dd223f811734a8006dd2d69"
+
+[[package]]
+name = "minicbor-serde"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7abdec9761edcb452764c68564ae4b77ec62f6c1a361aa68f5de15fd788c679"
+dependencies = [
+ "minicbor",
+ "serde",
+]
+
+[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2497,7 +2513,7 @@ dependencies = [
 
 [[package]]
 name = "monty"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "ahash",
  "chrono",
@@ -2510,6 +2526,7 @@ dependencies = [
  "jiter",
  "libm",
  "memchr",
+ "minicbor-serde",
  "monty-macros",
  "monty-types",
  "num-bigint",
@@ -2523,6 +2540,7 @@ dependencies = [
  "ruff_source_file",
  "ruff_text_size",
  "serde",
+ "serde_bytes",
  "serde_json",
  "sha2 0.11.0",
  "smallvec",
@@ -2536,14 +2554,14 @@ dependencies = [
 
 [[package]]
 name = "monty-alloc"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "monty-types",
 ]
 
 [[package]]
 name = "monty-apidoc"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "insta",
  "rustdoc-types",
@@ -2552,7 +2570,7 @@ dependencies = [
 
 [[package]]
 name = "monty-bench"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "codspeed-criterion-compat",
  "criterion",
@@ -2569,7 +2587,7 @@ dependencies = [
 
 [[package]]
 name = "monty-datatest"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "ahash",
  "datatest-stable",
@@ -2586,7 +2604,7 @@ dependencies = [
 
 [[package]]
 name = "monty-doctest"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "monty",
  "monty-pool",
@@ -2596,7 +2614,7 @@ dependencies = [
 
 [[package]]
 name = "monty-fs"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "ahash",
  "cap-std",
@@ -2608,7 +2626,7 @@ dependencies = [
 
 [[package]]
 name = "monty-fuzz"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "arbitrary",
  "libfuzzer-sys",
@@ -2618,7 +2636,7 @@ dependencies = [
 
 [[package]]
 name = "monty-js"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "monty-pool",
  "monty-types",
@@ -2628,7 +2646,6 @@ dependencies = [
  "num-bigint",
  "opentelemetry",
  "opentelemetry_sdk",
- "postcard",
  "serde",
  "serde_json",
  "tokio",
@@ -2636,7 +2653,7 @@ dependencies = [
 
 [[package]]
 name = "monty-macros"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "insta",
  "proc-macro2",
@@ -2646,7 +2663,7 @@ dependencies = [
 
 [[package]]
 name = "monty-pool"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "futures-util",
  "insta",
@@ -2672,7 +2689,7 @@ dependencies = [
 
 [[package]]
 name = "monty-proto"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "allocation-counter",
  "heck",
@@ -2692,7 +2709,7 @@ dependencies = [
 
 [[package]]
 name = "monty-runtime"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "anstream 0.6.21",
  "anstyle",
@@ -2711,7 +2728,7 @@ dependencies = [
 
 [[package]]
 name = "monty-type-checking"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "codspeed-criterion-compat",
  "criterion",
@@ -2731,15 +2748,16 @@ dependencies = [
 
 [[package]]
 name = "monty-types"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "jiff",
+ "minicbor-serde",
  "monty-macros",
  "num-bigint",
  "num-traits",
- "postcard",
  "serde",
+ "serde_bytes",
  "serde_json",
  "strum 0.27.2",
  "unicode-general-category",
@@ -2748,7 +2766,7 @@ dependencies = [
 
 [[package]]
 name = "monty-typeshed"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "path-slash",
  "ruff_db",
@@ -2758,7 +2776,7 @@ dependencies = [
 
 [[package]]
 name = "monty-wasm-runtime"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "monty-alloc",
  "monty-proto",
@@ -3428,7 +3446,7 @@ dependencies = [
 
 [[package]]
 name = "pydantic-monty-client"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "ahash",
  "chrono",
@@ -4384,6 +4402,16 @@ checksum = "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
 dependencies = [
  "serde_core",
  "serde_derive",
+]
+
+[[package]]
+name = "serde_bytes"
+version = "0.11.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5d440709e79d88e51ac01c4b72fc6cb7314017bb7da9eeff678aa94c10e3ea8"
+dependencies = [
+ "serde",
+ "serde_core",
 ]
 
 [[package]]

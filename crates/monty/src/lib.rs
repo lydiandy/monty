@@ -46,7 +46,10 @@ mod virtual_path;
 #[cfg(feature = "ref-count-return")]
 pub use crate::run::RefCountOutput;
 pub use crate::{
-    dump_format::{DUMP_VERSION, Dump, DumpError, MIN_SUPPORTED_DUMP_VERSION, Session, SessionRef, dump},
+    dump_format::{
+        DUMP_VERSION, Dump, DumpDecodeError, DumpEncodeError, DumpError, MIN_SUPPORTED_DUMP_VERSION, Session,
+        SessionRef, dump,
+    },
     embed::{
         Embed, HostCtx, HostModuleSource, HostObject, HostValue, HostVtable, KIND_ACCORDION_HEADER_TYPE,
         KIND_ACCORDION_ITEM_TYPE, KIND_ACCORDION_PANEL_TYPE, KIND_ACCORDION_TRIGGER_TYPE, KIND_ACCORDION_TYPE,

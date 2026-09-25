@@ -3,14 +3,14 @@
 Monty is designed to run code that a language model wrote and nobody reviewed.
 This page describes what that buys you and what it does not.
 
-The sandbox has been through two completed rounds of the [Hack Monty](https://pydantic.dev/articles/hack-monty-3)
-bounty program, and a third is under way.
-If you find a way out of it, please [open an issue](https://github.com/pydantic/monty/issues) or claim the bounty.
+Monty has a continuous bounty program for reported security vulnerabilities.
+If you find a way out of the sandbox, do not open a public issue; report it privately by creating a
+[security advisory](https://github.com/pydantic/monty/security).
 
 ## What "secure" means here
 
 Monty is a **language-level sandbox**, not an OS-level one.
-There is no container, no seccomp filter and no VM.
+There is no container, no seccomp filter and no virtual machine.
 The isolation comes from the interpreter itself: sandboxed code cannot express an operation that touches the host,
 because the interpreter implements no such operation.
 
@@ -18,19 +18,16 @@ because the interpreter implements no such operation.
 
     If you want Monty combined with OS-level isolation, see [Full Monty](server.md), the commercial version of Monty.
 
-Concretely:
+In practice that means:
 
 - **There is no ambient authority.** With no mounts and no host functions configured, the sandbox cannot read a file,
     read an environment variable, open a socket, or spawn a process.
     Not "it is blocked" — the capability does not exist in the bytecode VM.
     The wall clock and OS entropy are the exceptions: every session reads the clock by default and seeds `random`
-    from entropy; see [the clock](#the-clock) and [entropy](#entropy).
+    from entropy, although even those can be disabled or customised; see [the clock](#the-clock) and [entropy](#entropy).
 - **The interpreter performs no filesystem I/O at all.** It suspends with a description of the operation it wants, and a
     host component decides what to do about it.
-    All filesystem code lives in a separate crate (`monty-fs`) that worker artifacts do not even link in some builds.
-- **The dangerous modules are absent.** `socket`, `subprocess`, `multiprocessing`, `threading` and `ctypes`
-    are not importable, and are also missing from the bundled typeshed, so [type checking](type-checking.md) rejects code
-    that uses them before it runs.
+    All filesystem code lives in a separate crate (`monty-fs`).
 - **No FFI, no C dependencies.** Nothing in the sandbox can call into native code.
 
 ## The three host-access mechanisms
@@ -389,21 +386,22 @@ Its return value is ignored: the sandbox itself produces the `result` argument o
 
 ## Crash isolation
 
-Monty runs in a subprocess, so an unexpected memory error or panic in the interpreter cannot kill the main process;
-the same design makes it easy to run many Monty interpreters in parallel.
-The Python package and the native `@pydantic/monty` binding never run the interpreter in your process: every session
-runs in a `monty` worker subprocess.
+Python's local [`Monty`][pydantic_monty.Monty] / [`AsyncMonty`][pydantic_monty.AsyncMonty] pools and the native
+`@pydantic/monty` binding run every session in a `monty` worker subprocess.
+Worker panics and aborts terminate the worker rather than the host.
+For WebSocket sessions, see [remote workers](#remote-workers).
 
-The WebAssembly build has no subprocess to use.
-In a browser it runs off-thread in a `Worker`; under Node, which has no global `Worker`, `@pydantic/monty/wasm` runs
-in-process outright.
-See [in-process execution](#in-process-execution).
+The WebAssembly build runs off-thread in a browser Web Worker or Node `worker_threads` worker.
+Both support hard termination and replacement after WASM traps; environments without workers are rejected.
+These are not subprocesses: JS-engine crashes or process-wide OOM can still affect the host.
+Browser worker failures have no OS exit status; Node can report the thread's exit code.
 
 When a worker dies, the pool observes the death, discards the worker, spawns a replacement, and the call raises
 [`MontyCrashedError`][pydantic_monty.MontyCrashedError] ([`PoolError::Crashed`](api/rust/monty-pool.md#poolerror) in Rust).
-The session is lost; your process is not.
+The session is lost.
+Subprocess isolation protects native hosts; WASM worker isolation has the limits described above.
 
-Two more properties of the worker boundary matter:
+Two more properties of the subprocess worker boundary matter:
 
 - **Workers spawn with an empty environment** (Windows keeps only `SystemRoot`), so host secrets are never in a worker's
     memory to begin with.
@@ -473,11 +471,9 @@ sandboxed as the callback you wrote.
 
 ### In-process execution
 
-The Rust `monty` crate and the WebAssembly in-process degrade run the interpreter in the calling process.
+The Rust `monty` crate runs the interpreter in the calling process.
 The language-level sandbox still holds, but crash isolation does not: an abort in the sandbox is an abort in your
-process.
-In the browser, a real `Worker` restores isolation and gives the watchdog a hard kill via `Worker.terminate()`; where no
-`Worker` exists, the same API degrades to in-process with no preemption.
+process. The Python and JavaScript APIs do not offer an in-process execution mode.
 
 ### Remote workers
 

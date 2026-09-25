@@ -105,10 +105,17 @@ It returns a [`TurnEvent`](../api/rust/monty-pool.md#turnevent):
 | [`NameLookup { name, object_id }`](../api/rust/monty-pool.md#turnevent) | The sandbox read an undefined name, or a lazy attribute of a host object when `object_id` is `Some`                                                                    | [`Checkout::resume_name_lookup`](../api/rust/monty-pool.md#checkout)             |
 | [`ResolveFutures { .. }`](../api/rust/monty-pool.md#turnevent)          | Every sandbox task is blocked on host futures                                                                                                                          | [`Checkout::resume_futures`](../api/rust/monty-pool.md#checkout)                 |
 
+Every suspension variant also carries `position`, a `SourceRange` locating the suspending expression: the call, the
+name, or the `await` the main task is blocked on.
+
 A [`Checkout`](../api/rust/monty-pool.md#checkout) dropped without `finish()` kills its worker rather than returning it — mid-execution state cannot be
 trusted back into the pool.
 
 [`ReplConfig`](../api/rust/monty-pool.md#replconfig) carries the per-session sandbox [`ResourceLimits`](../api/rust/monty-types.md#resourcelimits) and type-checking options.
+`Checkout::worker_id()` identifies the worker within its pool, independent of PID reuse and transport;
+it returns `None` after the worker is released or discarded.
+`Checkout::pid()` is the subprocess-only OS diagnostic.
+
 [`Checkout::dump`](../api/rust/monty-pool.md#checkout) and [`Checkout::restore`](../api/rust/monty-pool.md#checkout) snapshot and restore a session, including onto a different worker or machine.
 Restore only unmodified snapshots whose provenance and integrity the caller has established;
 see [snapshot security](../security.md#deserializing-snapshots).
