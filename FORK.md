@@ -326,3 +326,22 @@ GitHub 提示冲突时，**不要**点 “Sync fork” / “Discard N commits”
 - 生成物没手拼：`.proto` 里 fork 的 `HostModuleSource`（`Feed` 的字段 6）自动合上后跑 `make generate-proto` 重生，产物与自动合并结果逐字一致（`git diff` 为空）
 - 本机已知红（**与本次合并无关**）：`cargo test -p monty --test heap_reader_compile_fail` 七条全红。原因是该测试的 `normalize_stderr` 只滤 `warning:` 开头的行，新版 cargo 的清单 lint（`unused_workspace_dependencies`、`manual_readme`、`redundant_homepage`、`non_kebab_case_bins`…）是多行输出，续行没被滤掉。已用 `git worktree` 在 pre-merge 的 `78c2a67d` 上复现同一处红，是环境问题，不是合并引入
 - merge commit `524f58e0`。
+
+### 2026-10-09 — 跟随 `v1.1.0`
+
+- 上游 tip `59152739`（tag `v1.1.0`，`release: 1.1.0 #969`），自 merge-base `dd5307d1` 起 17 个 commit、113 个文件。
+- 本 clone 的 `origin` 是 fork，合的是 `upstream/main`。**本轮未 push**。回滚 tag `pre-v1.1-merge` → `98aa85d3`。
+- 冲突 1 个路径：`crates/monty/src/dump_format.rs`，只有 `Type` 指纹那一行。上游期望 `0xe58f_b60f_0485_8b7d`（加了 `Complex`），尾巴上还有 `HostObject`，实测 `0x908d_6592_5856_8501`。
+- 其余 fork 面是自动合并，对过上游 diff，没有改结构：
+  - `heap_data.rs` / `types/type.rs`：上游把 `Complex` 插在中间（`Type` 在 `Float` 后，`HeapData` 在 `LongInt` 后），`HostObject` 仍是各自枚举最后一个
+  - `copy.rs`：`Complex` 进 `Shared` 组，`HostObject` 仍在 `Refused` 组末尾
+  - `intern.rs`：上游在中间加了 `Conjugate` / `FromNumber` / `Imag` / `Real`，没有往 `StaticStrings` 加工件名。`ui` / `gpui` / `gpui_base` / `db` / `__gpui_view__` 仍在 `Interns::new` 的动态池
+  - `monty.proto`：`HostModuleSource` 仍是 `Feed` 字段 6，上游 `Complex` 是节点字段 31。`make generate-proto` 重生后与自动合并逐字一致
+  - `monty-js/ts/shared.ts` 仍导出 `HostModuleSource`（上游这轮没动这个文件）
+- dump 判别值：**没有挪到能影响已存 dump 解码的位置**。`HeapData` / `Type` 按变体名标记，`HostObject` 的名字键没变，仍是各自枚举最后一个。`DUMP_VERSION` 没动，仍是 13。
+  - `Type` 指纹 `0xdcbf_71db_6d81_705e` → `0x908d_6592_5856_8501`（名字集合多了 `Complex`，再加上 `HostObject`，别照抄上游）
+  - `MontyType` 跟上游，`0x8af8_54dc_0bfe_1e6d` → `0x628c_e5c5_6b25_e2c2`（加了 `Complex`，fork 不往 `MontyType` 加变体）
+  - opcode、comparison、`BuiltinsFunctions` 指纹没变
+- 已知红仍是 `heap_reader_compile_fail` 七条，stderr 对不上是因为 cargo 清单 lint 续行（`sha2`、`ty_vendored`、`redundant_homepage`…）没被 `normalize_stderr` 滤掉。其余 `cargo test -p monty`：841 passed，doctest 另有 2 ignored
+- 下游源码没改。`Cargo.lock` 里 `monty` / `monty-macros` / `monty-types` 从 `1.0.0` 跟到 `1.1.0`（monty-ui、monty-reqwest、monty-tui，未提交）。monty-tui 的锁在这次 resolve 里还把 `branches` `0.4.6` → `0.5.1`、`turso*` `0.8.0-pre.13` → `0.8.0`，只留版本号时 `--locked` 不让过
+- merge commit `3b122b8f`。
