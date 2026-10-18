@@ -42,7 +42,11 @@ use crate::{
     host_modules::HostModuleRegistry,
     intern::{FunctionId, Interns, StaticStrings, StringId},
     modules::{
-        StandardLib, json::JsonStringCache, random::apply_seed_random, re::RePatternCache, time::apply_clock_reading,
+        StandardLib,
+        json::{JsonStringCache, apply_json_load},
+        random::apply_seed_random,
+        re::RePatternCache,
+        time::apply_clock_reading,
     },
     name_map::NameMap,
     object_bridge::MontyObjectExt,
@@ -2369,6 +2373,13 @@ impl<'h> VM<'h> {
             Some(PendingEffect::Post(PostConversionEffect::BufferStore { file_id })) => {
                 apply_buffer_store(file_id, value, self).map(Some)
             }
+            // Parsing runs outside `run_external`, so it needs its own execution-clock window.
+            Some(PendingEffect::Post(PostConversionEffect::JsonLoad { file_id })) => {
+                self.heap.tracker.on_execution_start();
+                let parsed = apply_json_load(file_id, value, self);
+                self.heap.tracker.on_execution_stop();
+                parsed.map(Some)
+            }
             // Answers nothing: the `ForIter` that asked for the load re-dispatches.
             Some(PendingEffect::Post(PostConversionEffect::BufferLoad { file_id })) => {
                 apply_buffer_load(file_id, value, self).map(|()| None)
@@ -2491,7 +2502,9 @@ impl<'h> VM<'h> {
                     self.push(Value::None);
                     return self.run_external();
                 }
-                PendingEffect::Post(PostConversionEffect::BufferStore { file_id }) => {
+                PendingEffect::Post(
+                    PostConversionEffect::BufferStore { file_id } | PostConversionEffect::JsonLoad { file_id },
+                ) => {
                     if let HeapReadOutput::OpenFile(mut file) = self.heap.read(file_id) {
                         file.get_mut(self.heap).clear_pending_read();
                         drop(file);

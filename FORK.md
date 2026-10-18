@@ -362,3 +362,14 @@ GitHub 提示冲突时，**不要**点 “Sync fork” / “Discard N commits”
 - `monty.proto` 自动合并，`HostModuleSource` 仍是 `Feed` 字段 6。没有手改生成物
 - 测试：`cargo test -p monty` 除已知的 `heap_reader_compile_fail` 七条（cargo 清单 lint 续行，合并前就红）外都过。`cargo run -p monty-datatest`：1380 passed / 4 failed，失败全是 CPython 侧（本机 Python 3.14.7 上 `str`/`bytes` 的 percent format、`str.format`、`fstring__all` 自己 `AssertionError`），这四条的 Monty 侧是过的，`match__*` 36/36。`cargo test -p monty-proto --features worker --test dispatch` 29 passed
 - merge commit `3f3f1346`。
+
+### 2026-10-19 — 跟随 `v1.2.0`
+
+- 上游 tip `e8db9aef`（tag `v1.2.0`，`v1.2.0 release prep (#1073)`），自 merge-base `d3286243` 起 4 个 commit：`tomllib`（`#1022`）、`json.load` / `json.dump`（`#1023`）、pyperformance 基准（`#996`）、版本号 `1.1.0` → `1.2.0`
+- 本 clone 的 `origin` 是 fork，合的是 `upstream/main`。回滚 tag `pre-v1.2-merge` → `5d10d749`。合并无冲突，自动合并。**尚未提交、未 push**
+- 进来的面：`tomllib`（`StandardLib` 插在 `Gc` 前面，`Gc` 仍是最后一个）、`json` 的文件读写（`PostConversionEffect::JsonLoad`）、`ExcType::TomlDecodeError`、`StaticStrings` 中间追加 `Dump` / `Fp` / `Load` / `TomlDecodeError` / `Tomllib`
+- 封闭枚举没撞。`HeapData::HostObject` 仍是 boxed，仍在最后。32 位 `MAX_HEAP_DATA_SIZE` 仍是 64。`Type::HostObject` 仍在最后。`Interns::new` 里 `ui` / `gpui` / `gpui_base` / `db` / `__gpui_view__` 还在。`load_host_module` 还在
+- dump 判别值没挪。`DUMP_VERSION` 仍是 13。`serialized_components_match_dump_version` 过，`Type` 指纹仍是 `0xd247_2a55_5b2a_e70f`（别照抄上游）
+- 单独 `cargo check -p monty --target wasm32-unknown-unknown` 会卡在 `getrandom` 0.3（`ahash` / `jiter` 拉进来的）没开 `wasm_js`。这不是 1.2 新引入的，宿主 wasm 仍由 monty-ui / monty-db 的 target 依赖打开 `wasm_js`
+- 测试：`cargo check -p monty-proto -p monty-runtime` 过。`cargo run -p monty-datatest -- tomllib` 6 过，`-- json__file` 2 过。`cargo fmt -p monty -- --check` 过
+- 下游只改了锁里的版本号 `1.1.0` → `1.2.0`（monty-ui、monty-db、monty-tui、monty-typesafe 的 `test/monty-host`）。monty-reqwest 的锁另外补上 `sha1` 0.11（monty 的 hashlib 依赖）。源码没改。`cargo check`：monty-db native 与 wasm `chain`、monty-ui `--tests` 与 wasm、monty-tui、monty-reqwest、typesafe host 都过。没跑总测试
