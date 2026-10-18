@@ -972,7 +972,9 @@ impl HostCtx for VmHostCtx<'_, '_> {
         let HeapData::Dict(dict) = self.vm.heap.get(id) else {
             return None;
         };
-        dict.key_at(index).map(|key| borrowed_value_to_host(self.vm, key))
+        dict.iter()
+            .nth(index)
+            .map(|(key, _)| borrowed_value_to_host(self.vm, key))
     }
 
     fn alloc_dict(&mut self, entries: Vec<(String, HostValue)>) -> Result<HeapId, String> {

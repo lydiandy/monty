@@ -27,6 +27,7 @@ export {
   NameLookupSnapshot,
   NOT_HANDLED,
   type ExternalFunction,
+  type ExternalModules,
   type FeedOptions,
   type HostModuleSource,
   type FeedStartOptions,
@@ -37,6 +38,7 @@ export {
   type PrintTargetInput,
   type Snapshot,
 } from './session.js'
+export { ExternalModule } from './externalModule.js'
 export { CollectString, CollectStreams, DEFAULT_MAX_PRINT_COLLECT_BYTES, type CollectedStreamEntry } from './print.js'
 export {
   MontyCrashedError,
