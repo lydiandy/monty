@@ -366,7 +366,8 @@ GitHub 提示冲突时，**不要**点 “Sync fork” / “Discard N commits”
 ### 2026-10-19 — 跟随 `v1.2.0`
 
 - 上游 tip `e8db9aef`（tag `v1.2.0`，`v1.2.0 release prep (#1073)`），自 merge-base `d3286243` 起 4 个 commit：`tomllib`（`#1022`）、`json.load` / `json.dump`（`#1023`）、pyperformance 基准（`#996`）、版本号 `1.1.0` → `1.2.0`
-- 本 clone 的 `origin` 是 fork，合的是 `upstream/main`。回滚 tag `pre-v1.2-merge` → `5d10d749`。合并无冲突，自动合并。**尚未提交、未 push**
+- 本 clone 的 `origin` 是 fork，合的是 `upstream/main`。回滚 tag `pre-v1.2-merge` → `5d10d749`。合并无冲突，自动合并
+- merge commit `38734b74`
 - 进来的面：`tomllib`（`StandardLib` 插在 `Gc` 前面，`Gc` 仍是最后一个）、`json` 的文件读写（`PostConversionEffect::JsonLoad`）、`ExcType::TomlDecodeError`、`StaticStrings` 中间追加 `Dump` / `Fp` / `Load` / `TomlDecodeError` / `Tomllib`
 - 封闭枚举没撞。`HeapData::HostObject` 仍是 boxed，仍在最后。32 位 `MAX_HEAP_DATA_SIZE` 仍是 64。`Type::HostObject` 仍在最后。`Interns::new` 里 `ui` / `gpui` / `gpui_base` / `db` / `__gpui_view__` 还在。`load_host_module` 还在
 - dump 判别值没挪。`DUMP_VERSION` 仍是 13。`serialized_components_match_dump_version` 过，`Type` 指纹仍是 `0xd247_2a55_5b2a_e70f`（别照抄上游）
