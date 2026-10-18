@@ -345,3 +345,20 @@ GitHub 提示冲突时，**不要**点 “Sync fork” / “Discard N commits”
 - 已知红仍是 `heap_reader_compile_fail` 七条，stderr 对不上是因为 cargo 清单 lint 续行（`sha2`、`ty_vendored`、`redundant_homepage`…）没被 `normalize_stderr` 滤掉。其余 `cargo test -p monty`：841 passed，doctest 另有 2 ignored
 - 下游源码没改。`Cargo.lock` 里 `monty` / `monty-macros` / `monty-types` 从 `1.0.0` 跟到 `1.1.0`（monty-ui、monty-reqwest、monty-tui，未提交）。monty-tui 的锁在这次 resolve 里还把 `branches` `0.4.6` → `0.5.1`、`turso*` `0.8.0-pre.13` → `0.8.0`，只留版本号时 `--locked` 不让过
 - merge commit `3b122b8f`。
+
+### 2026-10-18 — 跟随 `upstream/main`（v1.1.0 之后，含 `match`）
+
+- 上游 tip `d3286243`（`Fix match statement review findings (#1069)`），自 merge-base `59152739`（`v1.1.0`）起 39 个 commit。没有新的 release tag，workspace 版本仍是 `1.1.0`
+- 本 clone 的 `origin` 是 fork，合的是 `upstream/main`。回滚 tag `pre-2026-10-18-merge` → `ff67ce16`
+- `match` 语句在 `e748e67e`（`#1016`）落地，复查修补是 tip `d3286243`（`#1069`）。同批还进来 `csv`、`hashlib`、`bisect`、`os.path`、list slice assignment、宿主 `import` 挂起（`OsFunctionCall::Import`）
+- 冲突 9 个路径：`Cargo.lock`、`crates/monty/Cargo.toml`、`crates/monty/src/dump_format.rs`、`crates/monty/src/heap_data.rs`、`crates/monty/src/types/type.rs`、`crates/monty/src/types/module.rs`、`crates/monty/src/bytecode/vm/mod.rs`、`crates/monty-proto/src/worker.rs`、`crates/monty-proto/tests/dispatch.rs`
+  - 封闭枚举：上游新尾巴 `HashObject` / `DirScan` / `Csv`，以及 hashlib、csv 的 `Type` 变体，先收下，`HostObject` 仍接在最后
+  - `dump_format.rs`：`Type` 指纹 `0x908d_6592_5856_8501` → `0xd247_2a55_5b2a_e70f`（上游不含 `HostObject` 的期望是 `0xd1f9_8ab5_eb65_e86d`，别照抄）。opcode、comparison、`MontyType`、`BuiltinsFunctions` 跟上游，没另改
+  - `module.rs`：上游把模块名改成 `ModuleName::{Interned, Host}`。fork 的 `from_name_id` 改成写 `ModuleName::Interned`，上游的 `host` / `name_str` / `id` 保留
+  - `vm/mod.rs`：标准库模块走上游的 `CallResult::Value`。fork 的宿主模块（缓存、native vtable、应用目录 `.py`）仍在 `load_host_module` 里解析。两边都不认的名字挂起 `OsFunctionCall::Import`，没人接时 `run_to_completion` 仍报 `ModuleNotFoundError`
+  - `worker.rs`：上游的 `CheckedSource` / `import_stubs` 暂停保留，fork 的 `host_modules` 放进 `PendingFeed`，恢复后再交给 `feed_start_checked_with_host_modules`
+  - `embed.rs` 没有冲突，但上游删了 `Dict::key_at`（dict 改走 `PyHashTable`）。`dict_key_at` 改成按插入顺序 `iter().nth`
+- dump 判别值：`HeapData` / `Type` 仍按变体名标记。`HostObject` 仍是各自枚举最后一个。`DUMP_VERSION` 没动，仍是 13
+- `monty.proto` 自动合并，`HostModuleSource` 仍是 `Feed` 字段 6。没有手改生成物
+- 测试：`cargo test -p monty` 除已知的 `heap_reader_compile_fail` 七条（cargo 清单 lint 续行，合并前就红）外都过。`cargo run -p monty-datatest`：1380 passed / 4 failed，失败全是 CPython 侧（本机 Python 3.14.7 上 `str`/`bytes` 的 percent format、`str.format`、`fstring__all` 自己 `AssertionError`），这四条的 Monty 侧是过的，`match__*` 36/36。`cargo test -p monty-proto --features worker --test dispatch` 29 passed
+- merge commit `3f3f1346`。
