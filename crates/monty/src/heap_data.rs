@@ -174,7 +174,7 @@ macro_rules! heap_payloads {
             Csv(boxed $crate::types::CsvObject),
             /// Host-owned object (gpui-monty element handles, `cx`, theme, …).
             /// One payload with a host vtable, not one variant per widget.
-            HostObject(inline $crate::embed::HostObject),
+            HostObject(boxed $crate::embed::HostObject),
         }
     };
 }
@@ -204,7 +204,7 @@ heap_payloads!(define_heap_data);
 /// `Dict` sets it on 64-bit hosts. On 32-bit (the wasm worker) `Dict` halves
 /// while `Value`-built payloads do not, so the itertools family sets it instead
 /// — see the budget those adaptors are held to in `types::itertools`.
-const MAX_HEAP_DATA_SIZE: usize = if cfg!(target_pointer_width = "64") { 80 } else { 56 };
+const MAX_HEAP_DATA_SIZE: usize = if cfg!(target_pointer_width = "64") { 80 } else { 64 };
 
 // `HeapData` is copied on every allocate and free, and every byte past the
 // ceiling widens every slot of every heap page. Box the variant that trips

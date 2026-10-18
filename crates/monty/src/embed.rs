@@ -602,7 +602,7 @@ impl Embed {
     }
 
     pub fn alloc_host(&mut self, obj: HostObject) -> HeapId {
-        self.heap.allocate(HeapData::HostObject(obj))
+        self.heap.allocate(HeapData::HostObject(Box::new(obj)))
     }
 
     pub fn inc_ref(&self, id: HeapId) {
@@ -615,7 +615,7 @@ impl Embed {
 
     pub fn host_object(&self, id: HeapId) -> Option<HostObject> {
         match self.heap.get(id) {
-            HeapData::HostObject(obj) => Some(*obj),
+            HeapData::HostObject(obj) => Some(**obj),
             _ => None,
         }
     }
@@ -913,7 +913,7 @@ struct VmHostCtx<'a, 'h> {
 
 impl HostCtx for VmHostCtx<'_, '_> {
     fn alloc(&mut self, obj: HostObject) -> HeapId {
-        self.vm.heap.allocate(HeapData::HostObject(obj))
+        self.vm.heap.allocate(HeapData::HostObject(Box::new(obj)))
     }
 
     fn inc_ref(&mut self, id: HeapId) {
@@ -926,7 +926,7 @@ impl HostCtx for VmHostCtx<'_, '_> {
 
     fn host_object(&self, id: HeapId) -> Option<HostObject> {
         match self.vm.heap.get(id) {
-            HeapData::HostObject(obj) => Some(*obj),
+            HeapData::HostObject(obj) => Some(**obj),
             _ => None,
         }
     }
@@ -1141,10 +1141,10 @@ fn value_to_host(vm: &mut VM<'_>, value: Value) -> RunResult<HostValue> {
             Ok(HostValue::Heap(id))
         }
         Value::ModuleFunction(mf) => {
-            let id = vm.heap.allocate(HeapData::HostObject(HostObject {
+            let id = vm.heap.allocate(HeapData::HostObject(Box::new(HostObject {
                 kind: KIND_BOXED_MODULE_FN,
                 data: pack_module_function(mf),
-            }));
+            })));
             Ok(HostValue::Heap(id))
         }
         Value::Ref(id) => {
