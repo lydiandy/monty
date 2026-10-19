@@ -546,7 +546,7 @@ impl<'h> VM<'h> {
 
     /// Activates a task whose queue entry was removed, taking its resume result exactly once.
     /// Any returned error must be raised in the loaded context before executing bytecode.
-    fn activate_task(&mut self, task_id: TaskId) -> RunResult<()> {
+    pub(super) fn activate_task(&mut self, task_id: TaskId) -> RunResult<()> {
         let result = self.scheduler.take_resume_result(task_id);
         if self.scheduler.current_task_id() != Some(task_id) {
             if let Some(current) = self.scheduler.current_task_id() {
@@ -630,7 +630,7 @@ impl<'h> VM<'h> {
     /// Initializes the VM state to run a coroutine for a spawned task.
     ///
     /// Similar to exec_get_awaitable's coroutine handling, but for task initialization.
-    fn init_task_from_coroutine(&mut self, coroutine_id: HeapId) -> Result<(), RunError> {
+    pub(super) fn init_task_from_coroutine(&mut self, coroutine_id: HeapId) -> Result<(), RunError> {
         let HeapReadOutput::Coroutine(mut coro) = self.heap.read(coroutine_id) else {
             panic!("task coroutine_id doesn't point to a Coroutine")
         };

@@ -14,7 +14,7 @@ use monty_types::{CompileOptions, MontyException, PrintWriter, ResourceTracker};
 pub use crate::host_modules::HostModuleSource;
 use crate::{
     args::{ArgValues, KwargsValues},
-    bytecode::{CallResult, VM},
+    bytecode::{CallResult, FrameExit, HostAwait, VM, VMSnapshot},
     exception_private::{ExcType, ExcTypeExt, RunError, RunResult, SimpleException},
     heap::{Heap, HeapData, HeapId, HeapObjectRead, HeapReader},
     heap_data::FunctionDefaults,
@@ -348,9 +348,20 @@ pub trait HostCtx {
         Err("this host cannot mark @view".into())
     }
 
-    /// Call a Python callable with host args (Pending.then / host callbacks)
+    /// Call a Python callable with host args, host callbacks
+    ///
+    /// Awaitable values come from `host_await`
     fn call_callable(&mut self, _callable: HeapId, _args: Vec<HostValue>) -> Result<HostValue, String> {
         Err("this host cannot call callables".into())
+    }
+
+    /// A value the host resolves later: the call returns an awaitable, and
+    /// awaiting it parks the VM until [`Embed::resolve_future`] is called with
+    /// `call_id`
+    ///
+    /// Default: the host cannot await
+    fn host_await(&mut self) -> Result<(u32, HostValue), String> {
+        Err("this host cannot await".into())
     }
 }
 
@@ -428,11 +439,20 @@ pub trait HostVtable: 'static {
     }
 }
 
+/// Parked host await: the VM's state between `ResolveFutures` and the host's
+/// answer
+#[derive(Debug)]
+struct Awaiting {
+    snapshot: VMSnapshot,
+}
+
 /// Persistent VM session after loading an application module.
 pub struct Embed {
     executor: Executor,
     heap: Heap,
     globals: Vec<Value>,
+    /// Set while every task waits on a host future
+    awaiting: Option<Awaiting>,
 }
 
 impl Embed {
@@ -464,6 +484,7 @@ impl Embed {
             executor,
             heap,
             globals,
+            awaiting: None,
         };
         embed.run_module()?;
         Ok(embed)
@@ -564,7 +585,9 @@ impl Embed {
         })
     }
 
-    /// Call a method on a heap object (`init`, `render`, a click closure).
+    /// Call a method on a heap object (`init`, `render`, a click closure)
+    ///
+    /// An `async def` runs in this VM until it returns or waits on a host future
     pub fn call_method(
         &mut self,
         receiver: HeapId,
@@ -572,7 +595,7 @@ impl Embed {
         args: Vec<HostValue>,
     ) -> Result<HostValue, MontyException> {
         let name = name.to_owned();
-        self.with_idle_vm(move |vm| {
+        self.with_script_call(move |vm, resumed| {
             vm.heap.inc_ref(receiver);
             let mut arg_values = host_values_to_args(vm, args)?;
             arg_values = arg_values.prepend(Value::Ref(receiver));
@@ -581,13 +604,15 @@ impl Embed {
                 .evaluate_function("method", &func, arg_values)
                 .map_err(|e| e.into_python_exception(vm.interns, |_| Some("")))?;
             func.drop_with(vm);
-            value_to_host(vm, result).map_err(run_err_to_monty)
+            finish_call_value(vm, result, resumed)
         })
     }
 
-    /// Call a callable heap value (a click `Closure`) with host args (`event`, `cx`).
+    /// Call a callable heap value (a click `Closure`) with host args (`event`, `cx`)
+    ///
+    /// An `async def` runs in this VM until it returns or waits on a host future
     pub fn call_callable(&mut self, callable: HeapId, args: Vec<HostValue>) -> Result<HostValue, MontyException> {
-        self.with_idle_vm(move |vm| {
+        self.with_script_call(move |vm, resumed| {
             vm.heap.inc_ref(callable);
             let boxed_module = boxed_module_function(vm, callable);
             let func = boxed_module.unwrap_or(Value::Ref(callable));
@@ -595,10 +620,181 @@ impl Embed {
             let result = vm
                 .evaluate_function("<callback>", &func, arg_values)
                 .map_err(|e| e.into_python_exception(vm.interns, |_| Some("")))?;
-            // ModuleFunction is immediate; the heap box still needs a drop.
+            // ModuleFunction is immediate, the heap box still needs a drop
             Value::Ref(callable).drop_with(vm);
-            value_to_host(vm, result).map_err(run_err_to_monty)
+            finish_call_value(vm, result, resumed)
         })
+    }
+
+    /// Runs one script call in a single VM
+    ///
+    /// `resumed` is true when the VM was restored from a parked await
+    /// A coroutine result is driven in that same VM, and a wait parks once
+    fn with_script_call(
+        &mut self,
+        f: impl for<'h> FnOnce(&mut VM<'h>, bool) -> Result<(HostValue, HostAwait), MontyException>,
+    ) -> Result<HostValue, MontyException> {
+        if let Some(awaiting) = self.awaiting.take() {
+            return self.with_resumed_vm(awaiting, |vm| f(vm, true).map(|(value, _stop)| value));
+        }
+        let globals = mem::take(&mut self.globals);
+        let mut data = (&mut self.executor, None::<Vec<Value>>, None::<Awaiting>);
+        let result = HeapReader::with(
+            &mut self.heap,
+            &mut data,
+            |reader, (executor, globals_slot, awaiting)| {
+                let host_modules = &executor.host_modules;
+                let mut vm = VM::new_parked(
+                    globals,
+                    &mut executor.tables,
+                    &executor.program,
+                    reader,
+                    PrintWriter::Disabled,
+                );
+                vm.set_host_modules(host_modules);
+                match f(&mut vm, false) {
+                    Ok((value, HostAwait::Done)) => {
+                        *globals_slot = Some(vm.take_globals());
+                        Ok(value)
+                    }
+                    Ok((value, HostAwait::Suspended)) => {
+                        *awaiting = Some(park(vm));
+                        Ok(value)
+                    }
+                    Err(error) => {
+                        *globals_slot = Some(vm.take_globals());
+                        Err(error)
+                    }
+                }
+            },
+        );
+        if let Some(globals) = data.1 {
+            self.globals = globals;
+        }
+        self.awaiting = data.2;
+        result
+    }
+
+    /// Runs an awaitable, or a callable and then its awaitable result, until
+    /// it finishes or waits on a host future
+    ///
+    /// `id` is an owned heap reference, consumed even when this fails
+    ///
+    /// # Errors
+    /// The value is neither awaitable nor callable, the VM already waits on a
+    /// host future, or the code raised
+    pub fn drive(&mut self, id: HeapId) -> Result<(), MontyException> {
+        if let Some(awaiting) = self.awaiting.take() {
+            return self
+                .with_resumed_vm(awaiting, |vm| drive_in_vm(vm, id, true))
+                .map(|_| ());
+        }
+        let globals = mem::take(&mut self.globals);
+        let mut data = (&mut self.executor, None::<Vec<Value>>, None::<Awaiting>);
+        let result = HeapReader::with(
+            &mut self.heap,
+            &mut data,
+            |reader, (executor, globals_slot, awaiting)| {
+                let host_modules = &executor.host_modules;
+                let mut vm = VM::new_parked(
+                    globals,
+                    &mut executor.tables,
+                    &executor.program,
+                    reader,
+                    PrintWriter::Disabled,
+                );
+                vm.set_host_modules(host_modules);
+                match drive_in_vm(&mut vm, id, false) {
+                    Ok(HostAwait::Done) => {
+                        *globals_slot = Some(vm.take_globals());
+                        Ok(())
+                    }
+                    Ok(HostAwait::Suspended) => {
+                        *awaiting = Some(park(vm));
+                        Ok(())
+                    }
+                    Err(error) => Err(error),
+                }
+            },
+        );
+        if let Some(globals) = data.1 {
+            self.globals = globals;
+        }
+        self.awaiting = data.2;
+        result
+    }
+
+    /// Resolves the host future `call_id` with `value` and runs until the code
+    /// finishes or waits again
+    ///
+    /// # Errors
+    /// No host await is pending, or the resumed code raised
+    pub fn resolve_future(&mut self, call_id: u32, value: HostValue) -> Result<(), MontyException> {
+        let Some(awaiting) = self.awaiting.take() else {
+            return Err(MontyException::runtime_error("no host await is pending"));
+        };
+        self.run_parked(awaiting, |vm| {
+            let value = host_value_to_value(vm, value);
+            resume_host_future(vm, call_id, Ok(value))
+        })
+    }
+
+    /// Rejects the host future `call_id` with `message` and runs the parked
+    /// code until it finishes or waits again
+    ///
+    /// The error is a `RuntimeError`, so script `except Exception` catches it
+    ///
+    /// # Errors
+    /// No host await is pending, or the resumed code raised
+    pub fn fail_future(&mut self, call_id: u32, message: &str) -> Result<(), MontyException> {
+        let Some(awaiting) = self.awaiting.take() else {
+            return Err(MontyException::runtime_error("no host await is pending"));
+        };
+        let error: RunError = SimpleException::new_msg(ExcType::RuntimeError, message.to_owned()).into();
+        self.run_parked(awaiting, |vm| resume_host_future(vm, call_id, Err(error)))
+    }
+
+    /// Restores a parked VM, runs `f`, then parks it again or keeps the new
+    /// globals when it finished
+    fn run_parked(
+        &mut self,
+        awaiting: Awaiting,
+        f: impl for<'h> FnOnce(&mut VM<'h>) -> Result<HostAwait, MontyException>,
+    ) -> Result<(), MontyException> {
+        let Awaiting { snapshot } = awaiting;
+        let mut data = (&mut self.executor, None::<Vec<Value>>, None::<Awaiting>);
+        let result = HeapReader::with(&mut self.heap, &mut data, |reader, (executor, globals_slot, parked)| {
+            let host_modules = &executor.host_modules;
+            let mut vm = VM::restore(
+                snapshot,
+                &mut executor.tables,
+                &executor.program,
+                reader,
+                PrintWriter::Disabled,
+            );
+            vm.set_host_modules(host_modules);
+            match f(&mut vm) {
+                Ok(HostAwait::Done) => {
+                    *globals_slot = Some(vm.take_globals());
+                    Ok(())
+                }
+                Ok(HostAwait::Suspended) => {
+                    *parked = Some(park(vm));
+                    Ok(())
+                }
+                Err(error) => Err(error),
+            }
+        });
+        if let Some(globals) = data.1 {
+            self.globals = globals;
+        }
+        self.awaiting = data.2;
+        result
+    }
+
+    /// Whether every task waits on a host future
+    pub fn is_parked(&self) -> bool {
+        self.awaiting.is_some()
     }
 
     pub fn alloc_host(&mut self, obj: HostObject) -> HeapId {
@@ -701,6 +897,9 @@ impl Embed {
         &mut self,
         f: impl for<'h> FnOnce(&mut VM<'h>) -> Result<R, MontyException>,
     ) -> Result<R, MontyException> {
+        if let Some(awaiting) = self.awaiting.take() {
+            return self.with_resumed_vm(awaiting, f);
+        }
         let globals = mem::take(&mut self.globals);
         let mut data = (&mut self.executor, None::<Vec<Value>>);
         let result = HeapReader::with(&mut self.heap, &mut data, |reader, (executor, slot)| {
@@ -719,6 +918,161 @@ impl Embed {
         });
         self.globals = data.1.expect("idle vm returns globals");
         result
+    }
+
+    /// Runs `f` with the parked VM restored, then parks it again
+    ///
+    /// A synchronous call (a timer, an event handler) must not see the VM as
+    /// busy while a task waits on a host future, the parked tasks are left
+    /// untouched
+    fn with_resumed_vm<R>(
+        &mut self,
+        awaiting: Awaiting,
+        f: impl for<'h> FnOnce(&mut VM<'h>) -> Result<R, MontyException>,
+    ) -> Result<R, MontyException> {
+        let Awaiting { snapshot } = awaiting;
+        let mut data = (&mut self.executor, None::<Awaiting>);
+        let result = HeapReader::with(&mut self.heap, &mut data, |reader, (executor, parked)| {
+            let host_modules = &executor.host_modules;
+            let mut vm = VM::restore(
+                snapshot,
+                &mut executor.tables,
+                &executor.program,
+                reader,
+                PrintWriter::Disabled,
+            );
+            vm.set_host_modules(host_modules);
+            let result = f(&mut vm);
+            *parked = Some(park(vm));
+            result
+        });
+        self.awaiting = data.1;
+        result
+    }
+}
+
+fn is_awaitable(heap: &Heap, id: HeapId) -> bool {
+    matches!(
+        heap.get(id),
+        HeapData::Coroutine(_) | HeapData::ExternalFuture(_) | HeapData::GatherFuture(_)
+    )
+}
+
+fn callable_in(heap: &Heap, id: HeapId) -> bool {
+    match heap.get(id) {
+        HeapData::FunctionDefaults(_) | HeapData::Closure(_) | HeapData::BoundMethod(_) | HeapData::Partial(_) => true,
+        HeapData::HostObject(obj) => obj.kind == KIND_BOXED_MODULE_FN,
+        _ => false,
+    }
+}
+
+/// Runs a spawned value: an awaitable, or a callable whose result may be one
+///
+/// `resumed` is set when the call runs on a restored VM whose main task is
+/// already waiting on a host future
+fn drive_in_vm(vm: &mut VM<'_>, id: HeapId, resumed: bool) -> Result<HostAwait, MontyException> {
+    if is_awaitable(vm.heap, id) {
+        return drive_awaitable(vm, Value::Ref(id), resumed);
+    }
+    if !callable_in(vm.heap, id) {
+        Value::Ref(id).drop_with(vm);
+        return Err(MontyException::runtime_error("spawn takes an awaitable or a callable"));
+    }
+    vm.heap.inc_ref(id);
+    let func = Value::Ref(id);
+    let result = vm.evaluate_function("spawn", &func, ArgValues::Empty);
+    func.drop_with(vm);
+    Value::Ref(id).drop_with(vm);
+    let value = result.map_err(|error| error.into_python_exception(vm.interns, |_| Some("")))?;
+    if let Value::Ref(result_id) = &value
+        && is_awaitable(vm.heap, *result_id)
+    {
+        return drive_awaitable(vm, value, resumed);
+    }
+    value.drop_with(vm);
+    Ok(HostAwait::Done)
+}
+
+/// Drives a coroutine result in this VM, any other value is returned to the host
+///
+/// A coroutine's own return value stays inside the VM, the host call yields `None`
+fn finish_call_value(vm: &mut VM<'_>, value: Value, resumed: bool) -> Result<(HostValue, HostAwait), MontyException> {
+    if let Value::Ref(id) = value {
+        if matches!(vm.heap.get(id), HeapData::Coroutine(_)) {
+            let stop = drive_awaitable(vm, Value::Ref(id), resumed)?;
+            return Ok((HostValue::None, stop));
+        }
+        let host = value_to_host(vm, Value::Ref(id)).map_err(run_err_to_monty)?;
+        return Ok((host, HostAwait::Done));
+    }
+    let host = value_to_host(vm, value).map_err(run_err_to_monty)?;
+    Ok((host, HostAwait::Done))
+}
+
+/// Runs an owned awaitable value
+fn drive_awaitable(vm: &mut VM<'_>, value: Value, resumed: bool) -> Result<HostAwait, MontyException> {
+    let id = match value {
+        Value::Ref(id) => id,
+        other => {
+            other.drop_with(vm);
+            return Err(MontyException::runtime_error("spawn takes an awaitable or a callable"));
+        }
+    };
+    let coroutine = matches!(vm.heap.get(id), HeapData::Coroutine(_));
+    match (coroutine, resumed) {
+        (true, false) => vm
+            .run_coroutine(id)
+            .map_err(|error| error.into_python_exception(vm.interns, |_| Some(""))),
+        (true, true) if vm.can_spawn_task() => vm
+            .run_spawned_task(id)
+            .map_err(|error| error.into_python_exception(vm.interns, |_| Some(""))),
+        (true, true) => {
+            Value::Ref(id).drop_with(vm);
+            Err(MontyException::runtime_error(
+                "a coroutine cannot run while a value is awaited at the top level",
+            ))
+        }
+        (false, false) => vm
+            .run_awaitable(Value::Ref(id))
+            .map_err(|error| error.into_python_exception(vm.interns, |_| Some(""))),
+        (false, true) => {
+            Value::Ref(id).drop_with(vm);
+            Err(MontyException::runtime_error(
+                "only a coroutine can be spawned while another await is pending",
+            ))
+        }
+    }
+}
+
+/// Feeds one host outcome into the parked VM and runs until it waits again
+fn resume_host_future(
+    vm: &mut VM<'_>,
+    call_id: u32,
+    outcome: Result<Value, RunError>,
+) -> Result<HostAwait, MontyException> {
+    match outcome {
+        Ok(value) => vm.resolve_future(call_id, value),
+        Err(error) => vm.fail_future(call_id, error),
+    }
+    let exit = vm
+        .resume_with_resolved_futures(Vec::new())
+        .map_err(|error| error.into_python_exception(vm.interns, |_| Some("")))?;
+    match exit {
+        FrameExit::Return(value) => {
+            value.drop_with(vm);
+            Ok(HostAwait::Done)
+        }
+        FrameExit::ResolveFutures(_) => Ok(HostAwait::Suspended),
+        exit => {
+            let error = vm.unsupported_frame_exit("await", exit);
+            Err(error.into_python_exception(vm.interns, |_| Some("")))
+        }
+    }
+}
+
+fn park(vm: VM<'_>) -> Awaiting {
+    Awaiting {
+        snapshot: vm.snapshot(),
     }
 }
 
@@ -1063,6 +1417,12 @@ impl HostCtx for VmHostCtx<'_, '_> {
             .map_err(|e| e.into_python_exception(self.vm.interns, |_| Some("")).to_string())?;
         Value::Ref(callable).drop_with(self.vm);
         value_to_host(self.vm, result).map_err(|e| format!("{e:?}"))
+    }
+
+    fn host_await(&mut self) -> Result<(u32, HostValue), String> {
+        let (call_id, value) = self.vm.new_host_future();
+        let value = value_to_host(self.vm, value).map_err(|error| format!("{error:?}"))?;
+        Ok((call_id, value))
     }
 }
 
