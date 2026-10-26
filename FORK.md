@@ -374,3 +374,22 @@ GitHub 提示冲突时，**不要**点 “Sync fork” / “Discard N commits”
 - 单独 `cargo check -p monty --target wasm32-unknown-unknown` 会卡在 `getrandom` 0.3（`ahash` / `jiter` 拉进来的）没开 `wasm_js`。这不是 1.2 新引入的，宿主 wasm 仍由 monty-ui / monty-db 的 target 依赖打开 `wasm_js`
 - 测试：`cargo check -p monty-proto -p monty-runtime` 过。`cargo run -p monty-datatest -- tomllib` 6 过，`-- json__file` 2 过。`cargo fmt -p monty -- --check` 过
 - 下游只改了锁里的版本号 `1.1.0` → `1.2.0`（monty-ui、monty-db、monty-tui、monty-typesafe 的 `test/monty-host`）。monty-reqwest 的锁另外补上 `sha1` 0.11（monty 的 hashlib 依赖）。源码没改。`cargo check`：monty-db native 与 wasm `chain`、monty-ui `--tests` 与 wasm、monty-tui、monty-reqwest、typesafe host 都过。没跑总测试
+
+### 2026-10-26 — 跟随 `v1.4.0`
+
+- 上游 tip `ebdccb09`（`Preserve JS future snapshots after auto-resume rejection (#1118)`）。tag `1.4.0` 是 `4b015dc4`，其后还有 3 个 commit（`#1115`、`#1121`、`#1118`）。自 merge-base `e8db9aef`（`v1.2.0`）起 29 个 commit、343 个文件（含 `v1.3.0`）
+- 本 clone 的 `origin` 是 fork，合的是 `upstream/main`。回滚 tag `pre-v1.4-merge` → `59652f5f`。未 push
+- 冲突 9 个路径：`crates/monty/src/heap_data.rs`、`crates/monty/src/types/type.rs`、`crates/monty/src/dump_format.rs`、`crates/monty/src/heap/mod.rs`、`crates/monty/src/bytecode/vm/mod.rs`、`crates/monty/src/bytecode/vm/async_exec.rs`、`crates/monty/src/modules/copy.rs`、`crates/monty/src/lib.rs`、`crates/monty-proto/src/worker.rs`
+  - 上游把 `HeapData` 改成 `heap_payloads!` 单张载荷表（inline / boxed 与 serde 名都写在表里）。fork 的 `HostObject(boxed ...)` 接在 `DecimalContextManager` 之后，仍是最后一个。`Type::HostObject` 同样接在 `DecimalContextManager` 之后
+  - 上游把 `HeapRead` / `HeapReadMut` 拆开。fork 的 `Module::attrs_mut` / `set_attr` / `set_attr_key` 从 `HeapRead` 挪到 `HeapReadMut`（宿主模块写属性走可变句柄），`embed.rs` 与 `vm/mod.rs` 的 `HeapReadOutput::Module` 不再需要 `mut`
+  - 上游删了 `evaluate_function` / `unsupported_frame_exit` 的说明文字参数，fork 的调用点跟着去掉
+  - `py_iter` 的返回类型改成 `CallResult`，`embed.rs` 的 `HostObject` 实现包一层 `CallResult::Value`
+- dump：`DUMP_VERSION` 跟上游升到 14（`MIN_SUPPORTED_DUMP_VERSION` 13）。`HeapData` / `Type` 仍按变体名标记，`HostObject` 名字键没变
+  - `Type` 指纹 `0xd247_2a55_5b2a_e70f` → `0x41d5_a505_945b_422d`（上游不含 `HostObject` 的期望是 `0x578d_38b1_7715_f9a1`，别照抄）
+  - `MontyType` 跟上游 `0xa95a_cc16_8f6c_5e31`，fork 不往 `MontyType` 加变体
+- `monty.proto` 自动合并（`HostModuleSource` 仍是 `Feed` 字段 6），`make generate-proto` 重生后与自动合并逐字一致，没有手改生成物
+- 测试：`cargo test -p monty --no-fail-fast` 除已知的 `heap_reader_compile_fail` 24 条（cargo 清单 lint 续行，合并前就红）外全过；`cargo test -p monty --test host_await` 3 过；`cargo test -p monty-proto --features worker --test dispatch` 29 过；`cargo fmt -p monty -p monty-proto -- --check` 过
+- 下游 `cargo check`：monty-ui `--tests` 与 `--target wasm32-unknown-unknown`、monty-reqwest、monty-tui、monty-typesafe `test/monty-host` 都过。monty-ui 总命令（clean HEAD + 本次 fork）1296 passed / 5 failed，5 条都是临时 worktree 缺 `crates/monty-server/embed/server/js/host.js` 与同级 `monty-gpu` 路径；用户工作树另有 13 条动画 / 视图生命周期用例红，来自未提交的 `forget_generation` / `application_generation` 改动，clean HEAD 上同批用例全过
+- monty-db native / wasm `chain` 红，红点是它本机未提交的 turso / duck 改造（`Connection::interrupt`、`OpenConn::Web` 未覆盖），不是这次合并
+- 下游锁里的 `monty` / `monty-macros` / `monty-types` 从 `1.2.0` 跟到 `1.4.0`（monty-ui、monty-db、monty-reqwest、monty-tui、monty-typesafe 的 `test/monty-host`），源码没改
+- merge commit `05060371`
