@@ -10,9 +10,11 @@ mod builtins;
 mod bytecode;
 mod codecs;
 mod dump_format;
+mod dump_upgrade;
 mod embed;
 mod exception_private;
 mod expressions;
+mod frozen;
 mod fstring;
 mod function;
 mod hash;
@@ -29,6 +31,7 @@ mod parse;
 mod percent_format;
 mod predicate;
 mod prepare;
+mod py_value;
 mod repl;
 mod resource_checks;
 mod run;
@@ -80,6 +83,7 @@ pub use crate::{
         KIND_TURSO_CONN, KIND_TURSO_ROWS, KIND_VIEW, KIND_WEBSOCKET, KIND_WINDOW, KIND_WS_SOCKET,
     },
     heap::HeapId,
+    parse::type_check_nesting_exception,
     repl::{
         CheckedSource, MontyRepl, ReplContinuationMode, ReplFunctionCall, ReplNameLookup, ReplOsCall, ReplProgress,
         ReplResolveFutures, ReplStartError, detect_repl_continuation_mode,

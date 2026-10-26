@@ -28,6 +28,7 @@ in the next feed, and after a dump (see [random.md](random.md)).
 | `csv`         | [csv.md](csv.md)                 |
 | `dataclasses` | [dataclasses.md](dataclasses.md) |
 | `datetime`    | [datetime.md](datetime.md)       |
+| `decimal`     | [decimal.md](decimal.md)         |
 | `functools`   | [functools.md](functools.md)     |
 | `hashlib`     | [hashlib.md](hashlib.md)         |
 | `itertools`   | [itertools.md](itertools.md)     |
@@ -57,7 +58,7 @@ production sandboxes never see it.
 
 Common modules that are *not* importable in Monty (non-exhaustive):
 `abc`, `argparse`, `array`, `contextlib`,
-`ctypes`, `decimal`, `enum`, `fractions`,
+`ctypes`, `enum`, `fractions`,
 `heapq`, `hmac`, `http`, `inspect`, `io`,
 `logging`, `multiprocessing`, `operator`, `pickle`, `queue`,
 `socket`, `string`, `struct`, `subprocess`, `tempfile`, `threading`,
@@ -69,7 +70,7 @@ excluded because they would breach the sandbox. Others (`enum`, `operator`)
 are unimplemented and may appear over time.
 
 Some available modules cover only part of their CPython surface: `functools`
-implements only `reduce` and `partial`, `copy` only `copy()` and `deepcopy()`,
+implements only `reduce`, `partial`, `lru_cache`, and `cache`, `copy` only `copy()` and `deepcopy()`,
 `time` everything but `tzset` and the `clock_*` family, `hashlib` everything but `file_digest()` and `scrypt()`,
 and `collections` only the four types above; `tomllib` all three of its names, with the argument and exception differences listed in [tomllib.md](tomllib.md).
 The absent names are missing from

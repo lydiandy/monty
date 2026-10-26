@@ -147,8 +147,9 @@ Everything else raises `AttributeError`, including: `truncate()`,
     synchronous context that cannot suspend to the host — the `key` of
     `sorted()`/`list.sort()`/`min()`/`max()`, `map()`/`filter()` functions,
     `iter(callable, sentinel)`, `defaultdict`'s `default_factory`, and dunder
-    methods invoked implicitly. The first read that needs the host raises
-    `NotImplementedError: <context>: OS function 'Path.read_text' is not yet supported in this context` where CPython
+    methods that cannot suspend (see [classes.md](classes.md)).
+    The first read that needs the host raises
+    `NotImplementedError: OS function 'Path.read_text' cannot suspend in this synchronous context` where CPython
     would simply read.
 - A read that *fails* in the host leaves the file in a retry-safe state:
     `pending_read` is cleared, the buffer stays empty, and `eof` is not
@@ -186,7 +187,7 @@ Everything else raises `AttributeError`, including: `truncate()`,
     `bytes`. The error messages match CPython
     (`a bytes-like object is required, not '<type>'` /
     `write() argument must be str, not <type>`).
-- Text I/O is whole-file UTF-8 with no error handlers; newline handling
+- Text reads decode the whole file as UTF-8 with no error handlers; newline handling
     follows the `newline` argument (see above).
 - `io.UnsupportedOperation` (raised by `read()` on `'w'` files, `write()`
     on `'r'` files, etc.) inherits from both `OSError` and `ValueError` for

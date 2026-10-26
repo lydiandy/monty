@@ -92,7 +92,7 @@ impl<'h> VM<'h> {
                 Ok(HostAwait::Done)
             }
             FrameExit::ResolveFutures(_) => Ok(HostAwait::Suspended),
-            exit => Err(self.unsupported_frame_exit("await", exit)),
+            exit => Err(self.unsupported_frame_exit(exit)),
         }
     }
 }

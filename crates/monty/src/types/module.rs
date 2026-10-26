@@ -7,7 +7,7 @@ use crate::{
     bytecode::{CallResult, VM},
     defer_drop,
     exception_private::{ExcType, ExcTypeExt, RunResult},
-    heap::{BorrowedHeapReadMut, DropGuard, HeapId, HeapItem, HeapRead, heap_read_ref_as_field_mut},
+    heap::{BorrowedHeapReadMut, DropGuard, HeapId, HeapItem, HeapRead, HeapReadMut, heap_read_ref_as_field_mut},
     intern::{Interns, StaticStrings, StringId},
     types::Dict,
     value::{EitherStr, Value},
@@ -113,25 +113,27 @@ impl Module {
     }
 }
 
-impl<'h> HeapRead<'h, Module> {
-    fn attrs_mut(&mut self) -> BorrowedHeapReadMut<'_, 'h, Dict> {
+impl<'h> HeapReadMut<'h, Module> {
+    fn attrs_mut(&self) -> BorrowedHeapReadMut<'_, 'h, Dict> {
         heap_read_ref_as_field_mut!(self, Module, attrs)
     }
 
     /// Sets a module attribute, dropping any previous value.
-    pub fn set_attr(&mut self, name: impl Into<crate::intern::StringId>, value: Value, vm: &mut VM<'h>) {
+    pub fn set_attr(&self, name: impl Into<crate::intern::StringId>, value: Value, vm: &mut VM<'h>) {
         self.set_attr_key(Value::InternString(name.into()), value, vm);
     }
 
     /// Sets a module attribute from a heap/intern key, dropping any previous value.
-    pub fn set_attr_key(&mut self, name: Value, value: Value, vm: &mut VM<'h>) {
+    pub fn set_attr_key(&self, name: Value, value: Value, vm: &mut VM<'h>) {
         match self.attrs_mut().set(name, value, vm) {
             Ok(Some(old)) => old.drop_with(vm),
             Ok(None) => {}
             Err(_) => {}
         }
     }
+}
 
+impl<'h> HeapRead<'h, Module> {
     /// Gets an attribute by string ID for the `py_getattr` trait method.
     ///
     /// Returns the attribute value if found, or `None` if the attribute doesn't exist.
@@ -158,7 +160,7 @@ impl<'h> HeapRead<'h, Module> {
     ///
     /// Returns `CallResult` because module functions may need OS operations
     /// (e.g., `os.getenv()`) that require host involvement.
-    pub fn py_call_attr(&mut self, vm: &mut VM<'h>, attr: &EitherStr, args: ArgValues) -> RunResult<CallResult> {
+    pub fn py_call_attr(&self, vm: &mut VM<'h>, attr: &EitherStr, args: ArgValues) -> RunResult<CallResult> {
         let mut args_guard = DropGuard::new(args, vm);
         let vm = args_guard.ctx();
 

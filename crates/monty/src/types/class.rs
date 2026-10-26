@@ -11,9 +11,10 @@ use crate::{
     exception_private::{ExcType, ExcTypeExt, RunResult},
     hash::{HashValue, identity_hash},
     heap::{
-        BorrowedHeapReadMut, DropGuard, DropWithContext, HeapId, HeapItem, HeapObjectRead, HeapRead,
+        BorrowedHeapReadMut, DropGuard, DropWithContext, HeapId, HeapItem, HeapObjectRead, HeapReadMut, HeapReader,
         heap_read_ref_as_field_mut,
     },
+    intern::{Interns, StringId},
     types::{Union, str::allocate_string},
     value::{EitherStr, Value},
 };
@@ -81,8 +82,9 @@ impl Class {
     }
 }
 
-impl<'h> HeapRead<'h, Class> {
-    fn namespace_mut(&mut self) -> BorrowedHeapReadMut<'_, 'h, Dict> {
+impl<'h> HeapReadMut<'h, Class> {
+    /// Borrows the inline namespace for reader-gated attribute mutation.
+    fn namespace_mut(&self) -> BorrowedHeapReadMut<'_, 'h, Dict> {
         heap_read_ref_as_field_mut!(self, Class, namespace)
     }
 
@@ -91,15 +93,27 @@ impl<'h> HeapRead<'h, Class> {
     ///
     /// Existing instances observe the change immediately: instance attribute reads
     /// fall through to this namespace.
-    pub fn set_attr(&mut self, name: Value, value: Value, vm: &mut VM<'h>) -> RunResult<Option<Value>> {
+    pub fn set_attr(&self, name: Value, value: Value, vm: &mut VM<'h>) -> RunResult<Option<Value>> {
         self.namespace_mut().set(name, value, vm)
+    }
+
+    /// [`set_attr`](Self::set_attr) for a dump upgrade, which has no VM and
+    /// cannot fail: see `HeapRead::<Dict>::set_interned_str`.
+    pub(crate) fn set_interned_attr(
+        &self,
+        name: StringId,
+        value: Value,
+        heap: &mut HeapReader<'h>,
+        interns: &Interns,
+    ) -> Option<Value> {
+        self.namespace_mut().set_interned_str(name, value, heap, interns)
     }
 
     /// Removes a class attribute, returning it for the caller to drop.
     ///
     /// Only `@dataclass` needs this, to clear the `field()` object a class body
     /// bound for a factory-only field — CPython's decorator `delattr`s it.
-    pub fn pop_attr(&mut self, name: &Value, vm: &mut VM<'h>) -> RunResult<Option<Value>> {
+    pub fn pop_attr(&self, name: &Value, vm: &mut VM<'h>) -> RunResult<Option<Value>> {
         Ok(self.namespace_mut().pop(name, vm)?.map(|(key, value)| {
             key.drop_with(vm);
             value

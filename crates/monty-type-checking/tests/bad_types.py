@@ -2,6 +2,8 @@
 # Each section demonstrates a different category of type error.
 # ===
 
+import decimal
+import functools
 import hashlib
 import sys
 import tomllib
@@ -141,3 +143,24 @@ hashlib.sha256('text')
 tomllib.loads(b'a = 1')
 tomllib.load('pyproject.toml')
 tomllib.loads('a = 1', parse_float=float)
+
+
+# The cached-wrapper stub names its `cache_info()` return type the way typeshed
+# does, `_CacheInfo`; neither CPython nor Monty has a public `CacheInfo`.
+print(functools.CacheInfo)
+
+
+# A cached function keeps the signature it wrapped, so its call sites are
+# checked like any other function's.
+@functools.cache
+def cached_takes_int(n: int) -> int:
+    return n * 2
+
+
+cached_takes_int('nope')
+cached_takes_int(1, 2)
+cached_takes_int(n='nope')
+
+# === decimal: traps and flags take a list or a signal dict, not a tuple ===
+decimal.Context(traps=(decimal.Inexact,))
+decimal.localcontext(flags=(decimal.Rounded,))

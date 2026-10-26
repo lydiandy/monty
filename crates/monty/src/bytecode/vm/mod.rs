@@ -23,9 +23,11 @@ use std::{borrow::Cow, mem};
 pub(crate) use attr::PendingLookupEffect;
 pub(crate) use call::CallResult;
 pub(crate) use collections::unpack_exact;
+use exceptions::CaughtException;
 pub(crate) use host_await::HostAwait;
 use monty_types::{InvalidInputError, MontyObject, MontyUuid, OsFunctionCall, PrintWriter, SourceRange};
 pub(crate) use namespace::{FrameNamespace, function_namespace};
+use recursion::frame_recursion_depth;
 pub(crate) use recursion::{ContainsVM, RecursionToken, RunReentryGuard};
 use scheduler::Scheduler;
 
@@ -59,7 +61,7 @@ use crate::{
     parse::CodeRange,
     run::{Program, SessionTables, VmEnv},
     types::{
-        Dict, LongInt, Module, PyTrait, SessionRandom,
+        Dict, Module, PyTrait, SessionRandom,
         file::{apply_buffer_load, apply_buffer_store, apply_file_next, apply_open_name, apply_write_position},
         random::SEED_BYTES,
         str::allocate_string,
@@ -366,9 +368,7 @@ pub struct CallFrame<'code> {
 }
 
 /// Narrows a VM stack index to the frame's `u32` field.
-///
-/// The operand and exception stacks are bounded by the recursion limit and
-/// `Vec` capacity long before `u32::MAX`, so failure means a VM bug.
+/// Panics instead of truncating an index beyond the frame representation.
 #[inline]
 pub(super) fn stack_index(index: usize) -> u32 {
     u32::try_from(index).expect("VM stack index exceeds u32")
@@ -676,7 +676,7 @@ pub struct VMSnapshot {
     /// When entering an except handler, the exception is pushed onto this stack.
     /// When exiting via `ClearException`, the top is popped. This allows nested
     /// except handlers to restore the outer exception context.
-    exception_stack: Vec<Value>,
+    exception_stack: Vec<CaughtException>,
 
     /// IP of the instruction that caused the pause (for exception handling).
     instruction_ip: usize,
@@ -791,7 +791,7 @@ pub struct VM<'h> {
     /// When entering an except handler, the exception is pushed onto this stack.
     /// When exiting via `ClearException`, the top is popped. This allows nested
     /// except handlers to restore the outer exception context.
-    exception_stack: Vec<Value>,
+    exception_stack: Vec<CaughtException>,
 
     /// IP of the instruction being executed (for exception table lookup).
     ///
@@ -846,12 +846,12 @@ pub struct VM<'h> {
     /// the host; `None` for `obj.attr` and when nothing is in flight.
     pub(crate) pending_lookup_effect: Option<PendingLookupEffect>,
 
-    /// Current recursion depth — charged by function-call frames and by nested
+    /// Current recursion depth — charged by non-frozen call frames and by nested
     /// data-structure traversals (`repr`/`eq`/`cmp`/`hash`, json, ...).
     ///
     /// See [`recursion`](self::recursion) for the guard/token primitives that
     /// maintain it. Not serialized: it is reconstructed from the active frame
-    /// count on `restore` and rebalanced per-task across async switches.
+    /// count, excluding root and frozen frames, on `restore` and async switches.
     recursion_depth: usize,
 
     /// Reusable scratch buffer for building a sync call's locals, avoiding a
@@ -978,9 +978,7 @@ impl<'h> VM<'h> {
             })
             .collect();
 
-        // Restore recursion depth to match the number of suspended callers.
-        // The root frame does not contribute to recursion depth.
-        let current_frame_depth = frames.len().saturating_sub(1);
+        let current_frame_depth = frame_recursion_depth(frames.iter().map(|f| f.function_id), interns);
         let mut frames = frames;
         let current_frame = frames
             .pop()
@@ -1313,7 +1311,7 @@ impl<'h> VM<'h> {
                 countdown = c;
             } else {
                 countdown = CHECK_INTERVAL;
-                self.dispatch_checkpoint(check_limits, poll_print)?;
+                try_catch!(self, self.dispatch_checkpoint(check_limits, poll_print));
             }
 
             // Track instruction IP for exception table lookup
@@ -1362,14 +1360,7 @@ impl<'h> VM<'h> {
                 Opcode::LoadConst => {
                     let idx = self.current_frame.fetch_u16();
                     let value = self.current_frame.code.constant(idx);
-                    // Handle InternLongInt specially - convert to heap-allocated LongInt
-                    if let Value::InternLongInt(long_int_id) = value {
-                        let bi = self.interns.get_long_int(*long_int_id).clone();
-                        let long_value = LongInt::new(bi).into_value(self.heap);
-                        self.push(long_value);
-                    } else {
-                        self.push(value.clone_with_heap(self));
-                    }
+                    self.push(value.clone_with_heap(self));
                 }
                 Opcode::LoadNone => self.push(Value::None),
                 Opcode::LoadTrue => self.push(Value::Bool(true)),
@@ -1515,32 +1506,7 @@ impl<'h> VM<'h> {
                 }
                 Opcode::UnaryNeg => try_catch!(self, self.unary_neg()),
                 Opcode::UnaryPos => try_catch!(self, self.unary_pos()),
-                Opcode::UnaryInvert => {
-                    // Bitwise NOT
-                    let value = self.pop();
-                    match value {
-                        Value::Int(n) => self.push(Value::Int(!n)),
-                        Value::Bool(b) => self.push(Value::Int(!i64::from(b))),
-                        Value::Ref(id) => {
-                            if let HeapData::LongInt(li) = self.heap.get(id) {
-                                // LongInt bitwise NOT: ~x = -(x + 1)
-                                let inverted = -(li.inner() + 1i32);
-                                value.drop_with(self);
-                                let inverted_value = LongInt::new(inverted).into_value(self.heap);
-                                self.push(inverted_value);
-                            } else {
-                                let value_type = value.py_type_name(self);
-                                value.drop_with(self);
-                                catch!(self, ExcType::unary_type_error("~", &value_type));
-                            }
-                        }
-                        _ => {
-                            let value_type = value.py_type_name(self);
-                            value.drop_with(self);
-                            catch!(self, ExcType::unary_type_error("~", &value_type));
-                        }
-                    }
-                }
+                Opcode::UnaryInvert => try_catch!(self, self.unary_invert()),
                 // In-place Operations - route through exception handling.
                 // `+=`/`-=`/`&=`/`|=` first try a true in-place `Counter` op
                 // (mutating the left operand); everything else — and the
@@ -1740,7 +1706,7 @@ impl<'h> VM<'h> {
                 // Iteration - route through exception handling
                 Opcode::GetIter => {
                     let value = self.pop();
-                    let iterator = value.py_iter(self);
+                    let iterator = value.py_iter(self).and_then(|call| call.require_synchronous(self));
                     value.drop_with(self);
                     match iterator {
                         Ok(iterator) => self.push(iterator),
@@ -1801,23 +1767,14 @@ impl<'h> VM<'h> {
                     let (type_id, arg_count) = self.current_frame.fetch_u8_u8();
                     let arg_count = arg_count as usize;
 
-                    match self.exec_call_builtin_type(type_id, arg_count) {
-                        Ok(result) => self.push(result),
-                        Err(err) => catch!(self, err),
-                    }
+                    handle_call_result!(self, self.exec_call_builtin_type(type_id, arg_count));
                 }
                 Opcode::CallFunctionKw => {
                     // Fetch operands: pos_count, kw_count, then kw_count name indices
                     let (pos_count, kw_count) = self.current_frame.fetch_u8_u8();
                     let (pos_count, kw_count) = (pos_count as usize, kw_count as usize);
 
-                    // Read keyword name StringIds
-                    let mut kwname_ids = Vec::with_capacity(kw_count);
-                    for _ in 0..kw_count {
-                        kwname_ids.push(StringId::from_index(self.current_frame.fetch_u16()));
-                    }
-
-                    handle_call_result!(self, self.exec_call_function_kw(pos_count, kwname_ids));
+                    handle_call_result!(self, self.exec_call_function_kw(pos_count, kw_count));
                 }
                 Opcode::CallAttr => {
                     // CallAttr: u16 name_id, u8 arg_count
@@ -1835,13 +1792,7 @@ impl<'h> VM<'h> {
                     let name_id = StringId::from_index(name_idx);
                     let (pos_count, kw_count) = (pos_count as usize, kw_count as usize);
 
-                    // Read keyword name StringIds
-                    let mut kwname_ids = Vec::with_capacity(kw_count);
-                    for _ in 0..kw_count {
-                        kwname_ids.push(StringId::from_index(self.current_frame.fetch_u16()));
-                    }
-
-                    handle_call_result!(self, self.exec_call_attr_kw(name_id, pos_count, kwname_ids));
+                    handle_call_result!(self, self.exec_call_attr_kw(name_id, pos_count, kw_count));
                 }
                 Opcode::CallFunctionExtended => {
                     let flags = self.current_frame.fetch_u8();
@@ -1973,14 +1924,7 @@ impl<'h> VM<'h> {
                 Opcode::Reraise => {
                     // Clone rather than pop: a locally caught bare raise must
                     // preserve its enclosing handler's active exception.
-                    let raised = self.exception_stack.last().map(|exc| exc.clone_with_heap(self.heap));
-                    let error = match &raised {
-                        Some(exc) => self.make_exception(exc, true), // is_raise=true for reraise
-                        // No active exception - create a RuntimeError
-                        None => {
-                            SimpleException::new_msg(ExcType::RuntimeError, "No active exception to reraise").into()
-                        }
-                    };
+                    let (error, raised) = self.reraise_exception();
                     if let Some(result) = self.handle_exception_with_value(error, raised) {
                         return Err(result);
                     }
@@ -2226,7 +2170,7 @@ impl<'h> VM<'h> {
                     break Ok(());
                 }
                 Ok(exit) => {
-                    let error = this.unsupported_frame_exit("host module", exit);
+                    let error = this.unsupported_frame_exit(exit);
                     if let Some(error) = this.handle_exception(error) {
                         break Err(error);
                     }
@@ -2248,7 +2192,7 @@ impl<'h> VM<'h> {
                         continue;
                     }
                     match this.heap.read(module_id) {
-                        HeapReadOutput::Module(mut module) => {
+                        HeapReadOutput::Module(module) => {
                             module.set_attr(attr_name, value, this);
                         }
                         _ => value.drop_with(this),
@@ -2507,7 +2451,7 @@ impl<'h> VM<'h> {
                 PendingEffect::Post(
                     PostConversionEffect::BufferStore { file_id } | PostConversionEffect::JsonLoad { file_id },
                 ) => {
-                    if let HeapReadOutput::OpenFile(mut file) = self.heap.read(file_id) {
+                    if let HeapReadOutput::OpenFile(file) = self.heap.read(file_id) {
                         file.get_mut(self.heap).clear_pending_read();
                         drop(file);
                     }
@@ -2519,7 +2463,7 @@ impl<'h> VM<'h> {
                     previous_length,
                     ..
                 }) => {
-                    if let HeapReadOutput::OpenFile(mut file) = self.heap.read(file_id) {
+                    if let HeapReadOutput::OpenFile(file) = self.heap.read(file_id) {
                         file.get_mut(self.heap)
                             .rollback_write_position(previous_position, previous_length);
                         drop(file);
@@ -2624,7 +2568,7 @@ impl<'h> VM<'h> {
         Ok(())
     }
 
-    /// Installs a frame whose recursion level has already been reserved.
+    /// Installs a frame after any required recursion reservation.
     fn push_admitted_frame(&mut self, frame: CallFrame<'h>) {
         let caller = mem::replace(&mut self.current_frame, frame);
         self.suspended_frames.push(caller);
@@ -2638,6 +2582,7 @@ impl<'h> VM<'h> {
     ///
     /// Returns `true` if this frame indicated evaluation should stop when popped.
     pub(super) fn pop_frame(&mut self) -> bool {
+        let is_frozen = self.current_frame_is_frozen();
         let caller = self.suspended_frames.pop().expect("cannot pop the root frame");
         let frame = mem::replace(&mut self.current_frame, caller);
         let should_return = frame.should_return;
@@ -2645,7 +2590,7 @@ impl<'h> VM<'h> {
         // Sync instruction_ip to the restored caller so exception table lookups
         // target the correct frame after returning from a nested run() call.
         self.instruction_ip = self.current_frame.ip;
-        if !self.current_frame.is_parked {
+        if !self.current_frame.is_parked && !is_frozen {
             self.decr_recursion();
         }
         should_return
@@ -3061,7 +3006,7 @@ impl<'h> VM<'h> {
         let value = self.pop();
         if let Some((module_id, name_id)) = self.loaded_host_global_target(slot) {
             match self.heap.read(module_id) {
-                HeapReadOutput::Module(mut module) => module.set_attr(name_id, value, self),
+                HeapReadOutput::Module(module) => module.set_attr(name_id, value, self),
                 _ => value.drop_with(self),
             }
             return;
@@ -3163,7 +3108,7 @@ impl<'h> VM<'h> {
         defer_drop_mut!(value, this);
 
         let cell_id = this.cell_id_from_local(slot);
-        let HeapReadOutput::Cell(mut cell) = this.heap.read(cell_id) else {
+        let HeapReadOutput::Cell(cell) = this.heap.read(cell_id) else {
             panic!("StoreCell: entry is not a Cell")
         };
         mem::swap(&mut cell.get_mut(this.heap).0, value);
@@ -3181,7 +3126,7 @@ impl<'h> VM<'h> {
         defer_drop_mut!(value, this);
 
         let cell_id = this.cell_id_from_local(slot);
-        let HeapReadOutput::Cell(mut cell) = this.heap.read(cell_id) else {
+        let HeapReadOutput::Cell(cell) = this.heap.read(cell_id) else {
             panic!("DeleteCell: entry is not a Cell")
         };
         mem::swap(&mut cell.get_mut(this.heap).0, value);

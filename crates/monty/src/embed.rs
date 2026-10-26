@@ -509,7 +509,7 @@ impl Embed {
             let func = vm.globals[slot].clone_with_heap(vm);
             let arg_values = host_values_to_args(vm, args)?;
             let result = vm
-                .evaluate_function("call_global", &func, arg_values)
+                .evaluate_function(&func, arg_values)
                 .map_err(|e| e.into_python_exception(vm.interns, |_| Some("")))?;
             func.drop_with(vm);
             value_to_host(vm, result).map_err(run_err_to_monty)
@@ -601,7 +601,7 @@ impl Embed {
             arg_values = arg_values.prepend(Value::Ref(receiver));
             let func = lookup_method(vm, receiver, &name)?;
             let result = vm
-                .evaluate_function("method", &func, arg_values)
+                .evaluate_function(&func, arg_values)
                 .map_err(|e| e.into_python_exception(vm.interns, |_| Some("")))?;
             func.drop_with(vm);
             finish_call_value(vm, result, resumed)
@@ -618,7 +618,7 @@ impl Embed {
             let func = boxed_module.unwrap_or(Value::Ref(callable));
             let arg_values = host_values_to_args(vm, args)?;
             let result = vm
-                .evaluate_function("<callback>", &func, arg_values)
+                .evaluate_function(&func, arg_values)
                 .map_err(|e| e.into_python_exception(vm.interns, |_| Some("")))?;
             // ModuleFunction is immediate, the heap box still needs a drop
             Value::Ref(callable).drop_with(vm);
@@ -980,7 +980,7 @@ fn drive_in_vm(vm: &mut VM<'_>, id: HeapId, resumed: bool) -> Result<HostAwait, 
     }
     vm.heap.inc_ref(id);
     let func = Value::Ref(id);
-    let result = vm.evaluate_function("spawn", &func, ArgValues::Empty);
+    let result = vm.evaluate_function(&func, ArgValues::Empty);
     func.drop_with(vm);
     Value::Ref(id).drop_with(vm);
     let value = result.map_err(|error| error.into_python_exception(vm.interns, |_| Some("")))?;
@@ -1064,7 +1064,7 @@ fn resume_host_future(
         }
         FrameExit::ResolveFutures(_) => Ok(HostAwait::Suspended),
         exit => {
-            let error = vm.unsupported_frame_exit("await", exit);
+            let error = vm.unsupported_frame_exit(exit);
             Err(error.into_python_exception(vm.interns, |_| Some("")))
         }
     }
@@ -1146,7 +1146,7 @@ pub(crate) fn dispatch_call_attr(
         let arg_values = host_values_to_args(ctx.vm, args).map_err(run_err_from_monty)?;
         let nested = ctx
             .vm
-            .evaluate_function("<host-callback>", &func, arg_values)
+            .evaluate_function(&func, arg_values)
             .map_err(|e| e.into_python_exception(ctx.vm.interns, |_| Some("")))?;
         nested.drop_with(ctx.vm);
         func.drop_with(ctx.vm);
@@ -1157,7 +1157,7 @@ pub(crate) fn dispatch_call_attr(
         let arg_values = host_values_to_args(ctx.vm, args).map_err(run_err_from_monty)?;
         let nested = ctx
             .vm
-            .evaluate_function("<host-callback>", &func, arg_values)
+            .evaluate_function(&func, arg_values)
             .map_err(|e| e.into_python_exception(ctx.vm.interns, |_| Some("")))?;
         func.drop_with(ctx.vm);
         return Ok(CallResult::Value(nested));
@@ -1206,7 +1206,7 @@ pub(crate) fn dispatch_call(vm: &mut VM<'_>, id: HeapId, obj: HostObject, args: 
         let arg_values = host_values_to_args(ctx.vm, args).map_err(run_err_from_monty)?;
         let nested = ctx
             .vm
-            .evaluate_function("<host-callback>", &func, arg_values)
+            .evaluate_function(&func, arg_values)
             .map_err(|e| e.into_python_exception(ctx.vm.interns, |_| Some("")))?;
         nested.drop_with(ctx.vm);
         func.drop_with(ctx.vm);
@@ -1217,7 +1217,7 @@ pub(crate) fn dispatch_call(vm: &mut VM<'_>, id: HeapId, obj: HostObject, args: 
         let arg_values = host_values_to_args(ctx.vm, args).map_err(run_err_from_monty)?;
         let nested = ctx
             .vm
-            .evaluate_function("<host-callback>", &func, arg_values)
+            .evaluate_function(&func, arg_values)
             .map_err(|e| e.into_python_exception(ctx.vm.interns, |_| Some("")))?;
         func.drop_with(ctx.vm);
         return Ok(CallResult::Value(nested));
@@ -1385,7 +1385,7 @@ impl HostCtx for VmHostCtx<'_, '_> {
         };
         let v = host_value_to_value(self.vm, value);
         match self.vm.heap.read(module) {
-            crate::heap::HeapReadOutput::Module(mut module) => {
+            crate::heap::HeapReadOutput::Module(module) => {
                 module.set_attr_key(key, v, self.vm);
                 Ok(())
             }
@@ -1413,7 +1413,7 @@ impl HostCtx for VmHostCtx<'_, '_> {
         let arg_values = host_values_to_args(self.vm, args).map_err(|e| e.to_string())?;
         let result = self
             .vm
-            .evaluate_function("<callback>", &func, arg_values)
+            .evaluate_function(&func, arg_values)
             .map_err(|e| e.into_python_exception(self.vm.interns, |_| Some("")).to_string())?;
         Value::Ref(callable).drop_with(self.vm);
         value_to_host(self.vm, result).map_err(|e| format!("{e:?}"))
@@ -1634,7 +1634,7 @@ impl<'h> PyTrait<'h> for HeapObjectRead<'h, HostObject> {
         }
     }
 
-    fn py_iter(&self, vm: &mut VM<'h>) -> RunResult<Value> {
+    fn py_iter(&self, vm: &mut VM<'h>) -> RunResult<crate::bytecode::CallResult> {
         let id = self.id();
         let obj = *self.get(vm.heap);
         let iterable = match vm.heap.host() {
@@ -1644,7 +1644,7 @@ impl<'h> PyTrait<'h> for HeapObjectRead<'h, HostObject> {
         if !iterable {
             return Err(ExcType::type_error_not_iterable(&self.py_type_name(vm)));
         }
-        dispatch_iter(vm, id, obj)
+        Ok(crate::bytecode::CallResult::Value(dispatch_iter(vm, id, obj)?))
     }
 
     fn py_next(&mut self, vm: &mut VM<'h>) -> RunResult<Option<Value>> {

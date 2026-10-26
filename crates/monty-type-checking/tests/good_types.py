@@ -1,6 +1,7 @@
 import asyncio
 import bisect
 import datetime
+import decimal
 import functools
 import hashlib
 import itertools
@@ -636,6 +637,30 @@ try:
 except tomllib.TOMLDecodeError as toml_exc:
     check_str(str(toml_exc))
 
+# === decimal ===
+price = decimal.Decimal('19.99')
+assert_type(price * 3, decimal.Decimal)
+assert_type(price + 1, decimal.Decimal)
+assert_type(1 - price, decimal.Decimal)
+assert_type(price.quantize(decimal.Decimal('0.1'), rounding=decimal.ROUND_HALF_UP), decimal.Decimal)
+assert_type(round(price), int)
+assert_type(round(price, 1), decimal.Decimal)
+assert_type(int(price), int)
+check_float(float(price))
+assert_type(price < 20, bool)
+assert_type(price.as_tuple(), decimal.DecimalTuple)
+assert_type(price.sqrt(), decimal.Decimal)
+assert_type(decimal.getcontext().prec, int)
+assert_type(decimal.getcontext().flags[decimal.Inexact], bool)
+with decimal.localcontext(prec=50) as decimal_ctx:
+    assert_type(decimal_ctx, decimal.Context)
+# `traps` and `flags` take a list of signals as well as a signal dict
+assert_type(decimal.Context(traps=[decimal.InvalidOperation], flags=[]), decimal.Context)
+try:
+    decimal.Decimal('abc')
+except decimal.InvalidOperation as decimal_exc:
+    check_str(str(decimal_exc))
+
 # === iter() / next() ===
 # Element types must survive the `Iterator` protocol: `Iterator.__next__` is
 # decorated `@abstractmethod`, so a stub tree missing `abc` degrades every one
@@ -655,6 +680,32 @@ assert_type(list(iter(lambda: 0, 0)), list[int])
 # this annotation is a `not-subscriptable` error. ty models `partial` calls
 # itself, so the return type is not the stub's to get wrong.
 partial_ann: functools.partial[list[int]] = functools.partial(get_list_int)
+
+
+# The cached wrapper's return type comes from the wrapped function, and
+# `cache_info()` from the stub's `_CacheInfo`.
+@functools.cache
+def cached_double(n: int) -> int:
+    return n * 2
+
+
+assert_type(cached_double(2), int)
+assert_type(cached_double.cache_info().hits, int)
+assert_type(cached_double.cache_info().currsize, int)
+assert_type(cached_double.__wrapped__(2), int)
+
+
+# Keyword arguments and defaults come through the wrapper too, in every
+# decorator form.
+@functools.lru_cache(maxsize=2)
+def cached_repeat(a: int, b: str = 'x') -> str:
+    return b * a
+
+
+assert_type(cached_repeat(2), str)
+assert_type(cached_repeat(2, 'y'), str)
+assert_type(cached_repeat(2, b='y'), str)
+assert_type(functools.lru_cache(get_list_int)(), list[int])
 
 # Loop variables keep their element type for every iterable, not just lists
 for x_list in get_list_int():

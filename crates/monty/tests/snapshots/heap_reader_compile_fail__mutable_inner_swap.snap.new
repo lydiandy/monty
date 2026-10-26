@@ -1,0 +1,168 @@
+---
+source: crates/monty/tests/heap_reader_compile_fail.rs
+assertion_line: 121
+expression: actual
+---
+   --> Cargo.toml:133:1
+    |
+133 | sha2 = "0.11"
+    | ^^^^
+    |
+    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default
+help: consider removing the workspace dependency `sha2`
+  --> Cargo.toml:84:1
+   |
+84 | ty_vendored = "0.0.14"
+   | ^^^^^^^^^^^
+   |
+help: consider removing the workspace dependency `ty_vendored`
+  --> Cargo.toml:37:1
+   |
+37 | documentation = "https://github.com/pydantic/monty/"
+   | ^^^^^^^^^^^^^
+   |
+   = note: `cargo::unused_workspace_package_fields` is set to `warn` by default
+help: consider removing the field `workspace.package.documentation`
+  --> crates/monty-typeshed/Cargo.toml:12:12
+   |
+12 | homepage = { workspace = true }
+   |            ^^^^^^^^^^^^^^^^^^^^
+13 | repository = { workspace = true }
+   |              --------------------
+   |
+   = note: `cargo::redundant_homepage` is set to `warn` by default
+help: consider removing `package.homepage`
+  --> crates/monty-runtime/Cargo.toml:14:12
+   |
+14 | homepage = { workspace = true }
+   |            ^^^^^^^^^^^^^^^^^^^^
+15 | repository = { workspace = true }
+   |              --------------------
+   |
+   = note: `cargo::redundant_homepage` is set to `warn` by default
+help: consider removing `package.homepage`
+  --> crates/monty-macros/Cargo.toml:10:12
+   |
+10 | homepage = { workspace = true }
+   |            ^^^^^^^^^^^^^^^^^^^^
+11 | repository = { workspace = true }
+   |              --------------------
+   |
+   = note: `cargo::redundant_homepage` is set to `warn` by default
+help: consider removing `package.homepage`
+  --> crates/monty-python/Cargo.toml:14:12
+   |
+14 | homepage = { workspace = true }
+   |            ^^^^^^^^^^^^^^^^^^^^
+15 | repository = { workspace = true }
+   |              --------------------
+   |
+   = note: `cargo::redundant_homepage` is set to `warn` by default
+help: consider removing `package.homepage`
+  --> crates/monty-types/Cargo.toml:12:12
+   |
+12 | homepage = { workspace = true }
+   |            ^^^^^^^^^^^^^^^^^^^^
+13 | repository = { workspace = true }
+   |              --------------------
+   |
+   = note: `cargo::redundant_homepage` is set to `warn` by default
+help: consider removing `package.homepage`
+  --> crates/monty-proto/Cargo.toml:12:12
+   |
+12 | homepage = { workspace = true }
+   |            ^^^^^^^^^^^^^^^^^^^^
+13 | repository = { workspace = true }
+   |              --------------------
+   |
+   = note: `cargo::redundant_homepage` is set to `warn` by default
+help: consider removing `package.homepage`
+  --> crates/monty-fs/Cargo.toml:12:12
+   |
+12 | homepage = { workspace = true }
+   |            ^^^^^^^^^^^^^^^^^^^^
+13 | repository = { workspace = true }
+   |              --------------------
+   |
+   = note: `cargo::redundant_homepage` is set to `warn` by default
+help: consider removing `package.homepage`
+  --> crates/monty-type-checking/Cargo.toml:12:12
+   |
+12 | homepage = { workspace = true }
+   |            ^^^^^^^^^^^^^^^^^^^^
+13 | repository = { workspace = true }
+   |              --------------------
+   |
+   = note: `cargo::redundant_homepage` is set to `warn` by default
+help: consider removing `package.homepage`
+  --> crates/monty-js/Cargo.toml:15:12
+   |
+15 | homepage = { workspace = true }
+   |            ^^^^^^^^^^^^^^^^^^^^
+16 | repository = { workspace = true }
+   |              --------------------
+   |
+   = note: `cargo::redundant_homepage` is set to `warn` by default
+help: consider removing `package.homepage`
+  --> crates/monty-pool/Cargo.toml:12:12
+   |
+12 | homepage = { workspace = true }
+   |            ^^^^^^^^^^^^^^^^^^^^
+13 | repository = { workspace = true }
+   |              --------------------
+   |
+   = note: `cargo::redundant_homepage` is set to `warn` by default
+help: consider removing `package.homepage`
+  --> crates/monty-alloc/Cargo.toml:12:12
+   |
+12 | homepage = { workspace = true }
+   |            ^^^^^^^^^^^^^^^^^^^^
+13 | repository = { workspace = true }
+   |              --------------------
+   |
+   = note: `cargo::redundant_homepage` is set to `warn` by default
+help: consider removing `package.homepage`
+  --> crates/monty-wasm-runtime/Cargo.toml:13:12
+   |
+13 | homepage = { workspace = true }
+   |            ^^^^^^^^^^^^^^^^^^^^
+14 | repository = { workspace = true }
+   |              --------------------
+   |
+   = note: `cargo::redundant_homepage` is set to `warn` by default
+help: consider removing `package.homepage`
+error[E0596]: cannot borrow data in dereference of `BorrowedHeapReadMut<'_, '_, u64>` as mutable
+   --> crates/monty/src/heap/../../tests/heap_reader_compile_fail_cases/borrowed.rs:138:28
+    |
+138 |             std::mem::swap(&mut *outer, &mut *inner);
+    |                            ^^^^^^^^^^^ cannot borrow as mutable
+    |
+    = help: trait `DerefMut` is required to modify through a dereference, but it is not implemented for `BorrowedHeapReadMut<'_, '_, u64>`
+error[E0596]: cannot borrow data in dereference of `BorrowedHeapReadMut<'_, '_, u64>` as mutable
+   --> crates/monty/src/heap/../../tests/heap_reader_compile_fail_cases/borrowed.rs:138:41
+    |
+138 |             std::mem::swap(&mut *outer, &mut *inner);
+    |                                         ^^^^^^^^^^^ cannot borrow as mutable
+    |
+    = help: trait `DerefMut` is required to modify through a dereference, but it is not implemented for `BorrowedHeapReadMut<'_, '_, u64>`
+   --> crates/monty/src/bytecode/vm/async_exec.rs:637:39
+    |
+637 |         let HeapReadOutput::Coroutine(mut coro) = self.heap.read(coroutine_id) else {
+    |                                       ----^^^^
+    |                                       |
+    |                                       help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+   --> crates/monty/src/embed.rs:850:51
+    |
+850 |                 crate::heap::HeapReadOutput::Dict(mut dict) => {
+    |                                                   ----^^^^
+    |                                                   |
+    |                                                   help: remove this `mut`
+    --> crates/monty/src/embed.rs:1337:47
+     |
+1337 |             crate::heap::HeapReadOutput::Dict(mut dict) => {
+     |                                               ----^^^^
+     |                                               |
+     |                                               help: remove this `mut`
+For more information about this error, try `rustc --explain E0596`.

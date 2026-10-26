@@ -247,6 +247,16 @@ set entries persist their hash, which is why keys without a heap identity hash b
 `FunctionId`, never by discriminant), a semantic change to a stored value, or a `sha1` / `sha2` crate upgrade that
 changes their `SerializableState` layout (`hashlib`'s SHA-1 and SHA-2 objects persist it verbatim). `crates/monty/tests/dump_compat.rs` loads a checked-in fixture written at the current version; a
 change that breaks it decides between an alias, a default, or a bump plus `UPDATE_DUMP_FIXTURE=1` to regenerate.
+Frozen function code is also persisted: Rust calls its captured entry signature, and that code calls private native helpers.
+Incompatible changes to either calling convention require compatibility handling or a version bump, including changes
+to argument order or meaning.
+Compatible source-body changes do not require a bump; restored sessions retain their captured implementations.
+When the old data still holds everything the new meaning needs, bump `DUMP_VERSION` but keep
+`MIN_SUPPORTED_DUMP_VERSION`, and convert in one of two places so the live heap never carries a legacy form:
+a `#[serde(from = "Dumped…")]` shim when one value's stored shape changed (see `TableCursor`), or an upgrade in
+`dump_upgrade.rs`, which `Dump::load` runs over an older dump's heap and interns; its module docs list the rules.
+The first upgrade is `modules/dataclasses/legacy.rs` (version 13), tested against the `dataclasses_v13*.bin` fixtures
+the 1.1.0 release wrote, which must never be regenerated.
 
 ### Compilation overlays and stable intern entries
 
@@ -280,9 +290,11 @@ Changes to this module require careful review of the safety invariants documente
 
 #### Core concepts
 
-- **`HeapReader<'a, T>`** — A scoped borrow of the heap that produces `HeapRead` handles. Created exclusively via `HeapReader::with`, which takes a `for<'a>` closure bound makes the lifetime `'a` universally quantified, so `HeapRead` pointers cannot escape the closure.
-- **`HeapRead<'a, T>`** — A typed handle to a specific heap entry. Created by `heap.read(id)` which returns a `HeapReadOutput<'a>` enum that you match on. Tracks a reader count that prevents the entry from being freed while the handle exists.
-- **`HeapReadOutput<'a>`** — Enum over all `HeapRead<'a, T>` variants (one per `HeapData` variant). Pattern match to get the typed handle.
+- **`HeapReader<'a>`** — A scoped borrow created exclusively by `HeapReader::with`. Its `for<'a>` closure gives handles an invariant brand that cannot escape the closure.
+- **`HeapObjectRead<'a, T>`** — A typed heap-object guard holding its identity and reader count. `heap.read(id)` returns a `HeapReadOutput<'a>` variant containing one.
+- **`HeapReadMut<'a, T>`** — A mutable-access capability exposed only by shared reference from object guards and `protect_mut` wrappers. Its `get_mut(&self, &mut HeapReader)` serializes payload access through the reader.
+- **`HeapRead<'a, T>`** — A read-only capability exposed by shared dereference from mutable capabilities and `protect` wrappers. Capabilities must never be extracted, cloned or exposed via `DerefMut`: swapping them would detach their pointers from their owners.
+- **`HeapView<'a, T>`** — Shared payload access for generic helpers. Slice and box projections resolve their current storage on each access rather than cache pointers invalidated by parent mutation.
 
 #### Reading and mutating heap data
 
@@ -308,25 +320,27 @@ HeapReader::with(heap, &mut (), |heap, ()| {
 Key borrowing rules:
 
 - `get(&self, &HeapReader)` → `&T` — immutable access, prevents heap mutation while reference lives
-- `get_mut(&mut self, &mut HeapReader)` → `&mut T` — mutable access, exclusive
-- Multiple `HeapRead` handles can coexist, but only one can be accessed via `get_mut` at a time
+- `get_mut(&self, &mut HeapReader)` → `&mut T` — mutable access through `HeapReadMut`, exclusive via the reader
+- Both accessors borrow the capability and reader for the returned reference's lifetime, retaining the owner or protected source
+- Multiple capability aliases can coexist; their payload borrows cannot conflict
 - `dec_ref()` panics if any reader is active — prevents use-after-free
 
 #### Implementing type methods with HeapRead
 
-Type methods are implemented as `impl<'h> HeapRead<'h, T>` blocks. The `PyTrait<'h>` trait provides the common interface:
+Read-only helpers live on `HeapRead`; mutation helpers live on `HeapReadMut` and take `&self`.
+`PyTrait` remains implemented once per type on `HeapObjectRead`, which also supplies Python identity:
 
 ```rust
 // Methods on a heap type
-impl<'h> HeapRead<'h, List> {
-    pub fn append(&mut self, vm: &mut VM<'h>, item: Value) -> RunResult<()> {
+impl<'h> HeapReadMut<'h, List> {
+    pub fn append(&self, vm: &mut VM<'h>, item: Value) -> RunResult<()> {
         self.get_mut(vm.heap).items.push(item);
         Ok(())
     }
 }
 
 // PyTrait implementation
-impl<'h> PyTrait<'h> for HeapRead<'h, List> {
+impl<'h> PyTrait<'h> for HeapObjectRead<'h, List> {
     fn py_type(&self, vm: &VM<'h>) -> Type { Type::List }
     fn py_len(&self, vm: &VM<'h>) -> Option<usize> {
         Some(self.get(vm.heap).items.len())
@@ -399,6 +413,13 @@ iter.drop_with(self); // single path, no branching
 - The same value has `drop_with` called in multiple places (e.g. a loop with `continue` or `?` in the middle). This implies `defer_drop!` or `DropGuard` will be easier to read.
 - The explicit call to `drop_with` produces more lines of code than `defer_drop!` or `DropGuard` would. The latter often avoid rightward drift and make the cleanup logic easier.
 - The value is part of a container (e.g. `Vec<Value>`). Ideally the container itself implements `DropWithContext` and so `defer_drop` or `DropGuard` can be used on the whole container. Consider if a `DropWithContext` implementation for the container might be missing.
+
+### `#[strum(use_phf)]` only on large `EnumString` enums
+
+Add `use_phf` only to `EnumString` enums with more than ~100 variants, or ones that will clearly grow past that.
+Its SipHash costs ~11 ns per lookup however small the enum, while strum's default `match` costs 3–6 ns on enums of
+40–80 variants, and less still on misses whose length no variant shares.
+At ~970 variants (`StaticStrings`), `match` costs ~100 ns and PHF wins about 7×.
 
 ### Resource-tracked string construction (`StringBuilder`)
 

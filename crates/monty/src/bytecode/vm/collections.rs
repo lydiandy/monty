@@ -143,7 +143,7 @@ impl VM<'_> {
 
             // Extend the list
             if let Value::Ref(id) = list_ref {
-                let HeapReadOutput::List(mut list) = this.heap.read(*id) else {
+                let HeapReadOutput::List(list) = this.heap.read(*id) else {
                     panic!("list_extend: expected List on heap");
                 };
                 let list = list.get_mut(this.heap);
@@ -273,7 +273,7 @@ impl VM<'_> {
                     _ => "<unknown>".to_string(),
                 };
 
-                let HeapReadOutput::Dict(mut dict) = this.heap.read(dict_id) else {
+                let HeapReadOutput::Dict(dict) = this.heap.read(dict_id) else {
                     unreachable!("DictMerge: entry is not a Dict")
                 };
 
@@ -339,7 +339,7 @@ impl VM<'_> {
         let copied_items = copied_items.into_iter();
         defer_drop_mut!(copied_items, this);
         for (key, value) in copied_items {
-            let HeapReadOutput::Dict(mut dict) = this.heap.read(dict_id) else {
+            let HeapReadOutput::Dict(dict) = this.heap.read(dict_id) else {
                 unreachable!("DictUpdate: heap entry is always a Dict — compiler invariant")
             };
             let old = dict.set(key, value, this)?;
@@ -388,7 +388,7 @@ impl VM<'_> {
         let copied_items = copied_items.into_iter();
         defer_drop_mut!(copied_items, this);
         for item in copied_items {
-            let HeapReadOutput::Set(mut set) = this.heap.read(set_id) else {
+            let HeapReadOutput::Set(set) = this.heap.read(set_id) else {
                 unreachable!("SetExtend: heap entry is always a Set — compiler invariant")
             };
             set.add(item, this)?;
@@ -417,7 +417,7 @@ impl VM<'_> {
             return Err(RunError::internal("ListAppend: expected list ref on stack"));
         };
 
-        let HeapReadOutput::List(mut list) = self.heap.read(list_id) else {
+        let HeapReadOutput::List(list) = self.heap.read(list_id) else {
             value.drop_with(self);
             return Err(RunError::internal("ListAppend: expected list on heap"));
         };
@@ -440,7 +440,7 @@ impl VM<'_> {
             return Err(RunError::internal("SetAdd: expected set ref on stack"));
         };
 
-        let HeapReadOutput::Set(mut set) = self.heap.read(set_id) else {
+        let HeapReadOutput::Set(set) = self.heap.read(set_id) else {
             value.drop_with(self);
             return Err(RunError::internal("SetAdd: expected set on heap"));
         };
@@ -467,7 +467,7 @@ impl VM<'_> {
             return Err(RunError::internal("DictSetItem: expected dict ref on stack"));
         };
 
-        let HeapReadOutput::Dict(mut dict) = self.heap.read(dict_id) else {
+        let HeapReadOutput::Dict(dict) = self.heap.read(dict_id) else {
             key.drop_with(self);
             value.drop_with(self);
             return Err(RunError::internal("DictSetItem: expected dict on heap"));
@@ -499,7 +499,7 @@ impl VM<'_> {
         // Fast path: tuple, list, push onto stack without a temporary vector.
         if let Some(items) = exact_sequence_items(value, this.heap) {
             if items.len() != count {
-                return Err(unpack_size_error(count, items.len()));
+                return Err(ExcType::unpack_size_error(count, items.len()));
             }
             if count > this.stack.capacity() - this.stack.len() {
                 let capacity = this.stack.len().saturating_add(count);
@@ -602,7 +602,7 @@ pub(crate) fn unpack_exact(value: &Value, count: usize, vm: &mut VM<'_>) -> RunR
     // Fast path: tuple, list; unpack without iterator.
     if let Some(items) = exact_sequence_items(value, vm.heap) {
         if items.len() != count {
-            return Err(unpack_size_error(count, items.len()));
+            return Err(ExcType::unpack_size_error(count, items.len()));
         }
         vm.heap.tracker.check_allocation(count.saturating_mul(VALUE_SIZE))?;
         return Ok(items.iter().map(|item| item.clone_with_heap(vm.heap)).collect());
@@ -628,13 +628,13 @@ pub(crate) fn unpack_exact(value: &Value, count: usize, vm: &mut VM<'_>) -> RunR
     } else {
         let err = if items.len() > count {
             match total {
-                Some(total) => unpack_size_error(count, total),
+                Some(total) => ExcType::unpack_size_error(count, total),
                 None => unpack_too_many_unknown_error(count),
             }
         } else {
             // Short of `count`, so the iterable was drained and its true
             // length is known whether or not the type could report one.
-            unpack_size_error(count, items.len())
+            ExcType::unpack_size_error(count, items.len())
         };
         items.drop_with(vm);
         Err(err)
@@ -653,24 +653,10 @@ fn exact_sequence_items<'a>(value: &Value, heap: &'a Heap) -> Option<&'a [Value]
     }
 }
 
-/// Creates the appropriate ValueError for unpacking size mismatches.
-///
-/// Python uses different messages depending on whether there are too few or too many values:
-/// - Too few: "not enough values to unpack (expected X, got Y)"
-/// - Too many: "too many values to unpack (expected X, got Y)"
-fn unpack_size_error(expected: usize, actual: usize) -> RunError {
-    let message = if actual < expected {
-        format!("not enough values to unpack (expected {expected}, got {actual})")
-    } else {
-        format!("too many values to unpack (expected {expected}, got {actual})")
-    };
-    SimpleException::new_msg(ExcType::ValueError, message).into()
-}
-
 /// Creates the "too many values" ValueError when the total is unknown.
 ///
 /// Unpacking an iterator stops at the first surplus item, so unlike
-/// [`unpack_size_error`] there is no total to report — matching CPython.
+/// [`ExcTypeExt::unpack_size_error`] there is no total to report — matching CPython.
 fn unpack_too_many_unknown_error(expected: usize) -> RunError {
     SimpleException::new_msg(
         ExcType::ValueError,
