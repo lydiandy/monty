@@ -89,6 +89,21 @@ impl HostModuleRegistry {
         }
     }
 
+    /// Removes a module whose body did not finish and returns its heap id
+    ///
+    /// The caller owns that id's initial refcount and must `dec_ref` it
+    /// A module that already finished stays cached
+    pub fn abort_load(&self, name: &str) -> Option<HeapId> {
+        let mut runtime = self.runtime.borrow_mut();
+        match runtime.get(name).copied() {
+            Some(rt) if !rt.loaded => {
+                runtime.remove(name);
+                Some(rt.module_id)
+            }
+            _ => None,
+        }
+    }
+
     /// Cache a native host module (no Python body).
     pub fn cache_native(&self, name: &str, module_id: HeapId) {
         self.begin_load(name, module_id);

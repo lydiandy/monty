@@ -321,7 +321,15 @@ fn request_from_component(request: Request) -> Result<pb::ParentRequest, String>
             values: Some(WireArena::new(value::from_component(request.values, &mut budget)?)),
             skip_type_check: request.skip_type_check,
             cwd: request.cwd,
-            host_modules: Default::default(),
+            host_modules: request
+                .host_modules
+                .into_iter()
+                .map(|module| pb::HostModuleSource {
+                    name: module.name,
+                    filename: module.filename,
+                    source: module.source,
+                })
+                .collect(),
         }),
         Request::ResumeCall(request) => pb::parent_request::Kind::ResumeCall(pb::ResumeCall {
             call_id: request.call_id,
@@ -581,3 +589,50 @@ fn invalid_event(message: &str) -> Event {
 }
 
 bindings::export!(Component with_types_in bindings);
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        bindings::exports::pydantic::monty::worker::{Arena, FeedRequest, HostModuleSource, Request},
+        request_from_component,
+    };
+
+    fn feed(host_modules: Vec<HostModuleSource>) -> monty_proto::pb::Feed {
+        let request = Request::Feed(FeedRequest {
+            code: "import hello\nhello.greet('monty')".into(),
+            inputs: Vec::new(),
+            values: Arena { nodes: Vec::new() },
+            skip_type_check: true,
+            cwd: String::new(),
+            host_modules,
+        });
+        let parent = request_from_component(request).expect("feed request converts");
+        match parent.kind {
+            Some(monty_proto::pb::parent_request::Kind::Feed(feed)) => feed,
+            other => panic!("expected a feed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn feed_request_carries_host_modules() {
+        let source = "def greet(name='world'):\n    return f'hello,{name}'\n";
+        let feed = feed(vec![HostModuleSource {
+            name: "hello".into(),
+            filename: "hello.py".into(),
+            source: source.into(),
+        }]);
+        assert_eq!(feed.code, "import hello\nhello.greet('monty')");
+        assert!(feed.skip_type_check);
+        assert!(feed.cwd.is_empty());
+        assert_eq!(feed.host_modules.len(), 1);
+        assert_eq!(feed.host_modules[0].name, "hello");
+        assert_eq!(feed.host_modules[0].filename, "hello.py");
+        assert_eq!(feed.host_modules[0].source, source);
+    }
+
+    #[test]
+    fn feed_request_without_host_modules_stays_empty() {
+        let feed = feed(Vec::new());
+        assert!(feed.host_modules.is_empty());
+    }
+}

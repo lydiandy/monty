@@ -16,7 +16,7 @@ use crate::{
     args::{ArgValues, KwargsValues},
     bytecode::{CallResult, FrameExit, HostAwait, VM, VMSnapshot},
     exception_private::{ExcType, ExcTypeExt, RunError, RunResult, SimpleException},
-    heap::{Heap, HeapData, HeapId, HeapObjectRead, HeapReader},
+    heap::{DropWithContext, Heap, HeapData, HeapId, HeapObjectRead, HeapReader},
     heap_data::FunctionDefaults,
     modules::ModuleFunctions,
     run::{Executor, Program},
@@ -507,12 +507,14 @@ impl Embed {
             .index();
         self.with_idle_vm(move |vm| {
             let func = vm.globals[slot].clone_with_heap(vm);
-            let arg_values = host_values_to_args(vm, args)?;
-            let result = vm
-                .evaluate_function(&func, arg_values)
-                .map_err(|e| e.into_python_exception(vm.interns, |_| Some("")))?;
+            let evaluated = match host_values_to_args(vm, args) {
+                Ok(arg_values) => vm
+                    .evaluate_function(&func, arg_values)
+                    .map_err(|e| e.into_python_exception(vm.interns, |_| Some(""))),
+                Err(err) => Err(err),
+            };
             func.drop_with(vm);
-            value_to_host(vm, result).map_err(run_err_to_monty)
+            value_to_host(vm, evaluated?).map_err(run_err_to_monty)
         })
     }
 
@@ -597,14 +599,25 @@ impl Embed {
         let name = name.to_owned();
         self.with_script_call(move |vm, resumed| {
             vm.heap.inc_ref(receiver);
-            let mut arg_values = host_values_to_args(vm, args)?;
-            arg_values = arg_values.prepend(Value::Ref(receiver));
-            let func = lookup_method(vm, receiver, &name)?;
-            let result = vm
+            let arg_values = match host_values_to_args(vm, args) {
+                Ok(arg_values) => arg_values.prepend(Value::Ref(receiver)),
+                Err(err) => {
+                    vm.heap.dec_ref(receiver);
+                    return Err(err);
+                }
+            };
+            let func = match lookup_method(vm, receiver, &name) {
+                Ok(func) => func,
+                Err(err) => {
+                    arg_values.drop_with(vm);
+                    return Err(err);
+                }
+            };
+            let evaluated = vm
                 .evaluate_function(&func, arg_values)
-                .map_err(|e| e.into_python_exception(vm.interns, |_| Some("")))?;
+                .map_err(|e| e.into_python_exception(vm.interns, |_| Some("")));
             func.drop_with(vm);
-            finish_call_value(vm, result, resumed)
+            finish_call_value(vm, evaluated?, resumed)
         })
     }
 
@@ -614,15 +627,17 @@ impl Embed {
     pub fn call_callable(&mut self, callable: HeapId, args: Vec<HostValue>) -> Result<HostValue, MontyException> {
         self.with_script_call(move |vm, resumed| {
             vm.heap.inc_ref(callable);
-            let boxed_module = boxed_module_function(vm, callable);
-            let func = boxed_module.unwrap_or(Value::Ref(callable));
-            let arg_values = host_values_to_args(vm, args)?;
-            let result = vm
-                .evaluate_function(&func, arg_values)
-                .map_err(|e| e.into_python_exception(vm.interns, |_| Some("")))?;
-            // ModuleFunction is immediate, the heap box still needs a drop
-            Value::Ref(callable).drop_with(vm);
-            finish_call_value(vm, result, resumed)
+            // One owned ref for the box, the call target may be an immediate ModuleFunction
+            let owned = Value::Ref(callable);
+            let module_fn = boxed_module_function(vm, callable);
+            let evaluated = match host_values_to_args(vm, args) {
+                Ok(arg_values) => vm
+                    .evaluate_function(module_fn.as_ref().unwrap_or(&owned), arg_values)
+                    .map_err(|e| e.into_python_exception(vm.interns, |_| Some(""))),
+                Err(err) => Err(err),
+            };
+            owned.drop_with(vm);
+            finish_call_value(vm, evaluated?, resumed)
         })
     }
 
@@ -713,7 +728,11 @@ impl Embed {
                         *awaiting = Some(park(vm));
                         Ok(())
                     }
-                    Err(error) => Err(error),
+                    Err(error) => {
+                        // The module namespace lives in this VM, dropping it would wipe the session
+                        *globals_slot = Some(vm.take_globals());
+                        Err(error)
+                    }
                 }
             },
         );
@@ -782,7 +801,11 @@ impl Embed {
                     *parked = Some(park(vm));
                     Ok(())
                 }
-                Err(error) => Err(error),
+                Err(error) => {
+                    // Snapshot already consumed the namespace, put it back so later calls still see it
+                    *globals_slot = Some(vm.take_globals());
+                    Err(error)
+                }
             }
         });
         if let Some(globals) = data.1 {
@@ -847,7 +870,7 @@ impl Embed {
         self.with_idle_vm(|vm| {
             let dict_id = vm.heap.allocate(HeapData::Dict(Dict::new()));
             match vm.heap.read(dict_id) {
-                crate::heap::HeapReadOutput::Dict(mut dict) => {
+                crate::heap::HeapReadOutput::Dict(dict) => {
                     for (key, value) in entries {
                         let k = allocate_string(key, vm.heap);
                         let v = host_value_to_value(vm, value);
@@ -1140,29 +1163,7 @@ pub(crate) fn dispatch_call_attr(
         .map_err(|msg| SimpleException::new_msg(ExcType::RuntimeError, msg))?;
     let pending = host.borrow_mut().take_pending_call();
     let replace = host.borrow_mut().take_pending_replace();
-    let value = host_value_to_value(ctx.vm, result);
-    if let Some((callable, args)) = pending {
-        let func = Value::Ref(callable);
-        let arg_values = host_values_to_args(ctx.vm, args).map_err(run_err_from_monty)?;
-        let nested = ctx
-            .vm
-            .evaluate_function(&func, arg_values)
-            .map_err(|e| e.into_python_exception(ctx.vm.interns, |_| Some("")))?;
-        nested.drop_with(ctx.vm);
-        func.drop_with(ctx.vm);
-    }
-    if let Some((callable, args)) = replace {
-        value.drop_with(ctx.vm);
-        let func = Value::Ref(callable);
-        let arg_values = host_values_to_args(ctx.vm, args).map_err(run_err_from_monty)?;
-        let nested = ctx
-            .vm
-            .evaluate_function(&func, arg_values)
-            .map_err(|e| e.into_python_exception(ctx.vm.interns, |_| Some("")))?;
-        func.drop_with(ctx.vm);
-        return Ok(CallResult::Value(nested));
-    }
-    Ok(CallResult::Value(value))
+    finish_dispatched_call(ctx.vm, result, pending, replace)
 }
 
 pub(crate) fn dispatch_getattr(
@@ -1185,7 +1186,8 @@ pub(crate) fn dispatch_getattr(
 
 pub(crate) fn dispatch_call(vm: &mut VM<'_>, id: HeapId, obj: HostObject, args: ArgValues) -> RunResult<CallResult> {
     if obj.kind == KIND_BOXED_MODULE_FN {
-        let mf = unpack_module_function(obj.data);
+        let mf =
+            unpack_module_function(obj.data).map_err(|msg| SimpleException::new_msg(ExcType::RuntimeError, msg))?;
         return mf.call(vm, args);
     }
     let host = vm
@@ -1200,29 +1202,7 @@ pub(crate) fn dispatch_call(vm: &mut VM<'_>, id: HeapId, obj: HostObject, args: 
         .map_err(|msg| SimpleException::new_msg(ExcType::RuntimeError, msg))?;
     let pending = host.borrow_mut().take_pending_call();
     let replace = host.borrow_mut().take_pending_replace();
-    let value = host_value_to_value(ctx.vm, result);
-    if let Some((callable, args)) = pending {
-        let func = Value::Ref(callable);
-        let arg_values = host_values_to_args(ctx.vm, args).map_err(run_err_from_monty)?;
-        let nested = ctx
-            .vm
-            .evaluate_function(&func, arg_values)
-            .map_err(|e| e.into_python_exception(ctx.vm.interns, |_| Some("")))?;
-        nested.drop_with(ctx.vm);
-        func.drop_with(ctx.vm);
-    }
-    if let Some((callable, args)) = replace {
-        value.drop_with(ctx.vm);
-        let func = Value::Ref(callable);
-        let arg_values = host_values_to_args(ctx.vm, args).map_err(run_err_from_monty)?;
-        let nested = ctx
-            .vm
-            .evaluate_function(&func, arg_values)
-            .map_err(|e| e.into_python_exception(ctx.vm.interns, |_| Some("")))?;
-        func.drop_with(ctx.vm);
-        return Ok(CallResult::Value(nested));
-    }
-    Ok(CallResult::Value(value))
+    finish_dispatched_call(ctx.vm, result, pending, replace)
 }
 
 pub(crate) fn dispatch_iter(vm: &mut VM<'_>, id: HeapId, obj: HostObject) -> RunResult<Value> {
@@ -1334,7 +1314,7 @@ impl HostCtx for VmHostCtx<'_, '_> {
     fn alloc_dict(&mut self, entries: Vec<(String, HostValue)>) -> Result<HeapId, String> {
         let dict_id = self.vm.heap.allocate(HeapData::Dict(Dict::new()));
         match self.vm.heap.read(dict_id) {
-            crate::heap::HeapReadOutput::Dict(mut dict) => {
+            crate::heap::HeapReadOutput::Dict(dict) => {
                 for (key, value) in entries {
                     let k = allocate_string(key, self.vm.heap);
                     let v = host_value_to_value(self.vm, value);
@@ -1408,15 +1388,17 @@ impl HostCtx for VmHostCtx<'_, '_> {
 
     fn call_callable(&mut self, callable: HeapId, args: Vec<HostValue>) -> Result<HostValue, String> {
         self.vm.heap.inc_ref(callable);
-        let boxed_module = boxed_module_function(self.vm, callable);
-        let func = boxed_module.unwrap_or(Value::Ref(callable));
-        let arg_values = host_values_to_args(self.vm, args).map_err(|e| e.to_string())?;
-        let result = self
-            .vm
-            .evaluate_function(&func, arg_values)
-            .map_err(|e| e.into_python_exception(self.vm.interns, |_| Some("")).to_string())?;
-        Value::Ref(callable).drop_with(self.vm);
-        value_to_host(self.vm, result).map_err(|e| format!("{e:?}"))
+        let owned = Value::Ref(callable);
+        let module_fn = boxed_module_function(self.vm, callable);
+        let evaluated = match host_values_to_args(self.vm, args) {
+            Ok(arg_values) => self
+                .vm
+                .evaluate_function(module_fn.as_ref().unwrap_or(&owned), arg_values)
+                .map_err(|e| e.into_python_exception(self.vm.interns, |_| Some("")).to_string()),
+            Err(err) => Err(err.to_string()),
+        };
+        owned.drop_with(self.vm);
+        value_to_host(self.vm, evaluated?).map_err(|e| format!("{e:?}"))
     }
 
     fn host_await(&mut self) -> Result<(u32, HostValue), String> {
@@ -1450,17 +1432,96 @@ fn borrowed_value_to_host(vm: &VM<'_>, value: &Value) -> HostValue {
 }
 
 fn args_to_host(vm: &mut VM<'_>, args: ArgValues) -> RunResult<(Vec<HostValue>, Vec<(String, HostValue)>)> {
-    let (pos, kwargs) = args.into_parts();
+    let (mut pos, kwargs) = args.into_parts();
     let mut out = Vec::new();
-    for value in pos {
-        out.push(value_to_host(vm, value)?);
+    loop {
+        let Some(value) = pos.next() else {
+            break;
+        };
+        match value_to_host(vm, value) {
+            Ok(host) => out.push(host),
+            Err(err) => {
+                release_host_values(vm, out);
+                pos.drop_with(vm);
+                kwargs.drop_with(vm);
+                return Err(err);
+            }
+        }
     }
+    let mut kwargs = kwargs.into_iter();
     let mut host_kwargs = Vec::new();
-    for (key, value) in kwargs {
-        let name = kwargs_key_to_string(vm, key)?;
-        host_kwargs.push((name, value_to_host(vm, value)?));
+    loop {
+        let Some((key, value)) = kwargs.next() else {
+            break;
+        };
+        let name = match kwargs_key_to_string(vm, key) {
+            Ok(name) => name,
+            Err(err) => {
+                release_host_values(vm, out);
+                release_host_values(vm, host_kwargs.into_iter().map(|(_, host)| host));
+                value.drop_with(vm);
+                kwargs.drop_with(vm);
+                return Err(err);
+            }
+        };
+        match value_to_host(vm, value) {
+            Ok(host) => host_kwargs.push((name, host)),
+            Err(err) => {
+                release_host_values(vm, out);
+                release_host_values(vm, host_kwargs.into_iter().map(|(_, host)| host));
+                kwargs.drop_with(vm);
+                return Err(err);
+            }
+        }
     }
     Ok((out, host_kwargs))
+}
+
+/// Drops heap refs a failed conversion already handed to the host side
+fn release_host_values(vm: &mut VM<'_>, values: impl IntoIterator<Item = HostValue>) {
+    for value in values {
+        if let HostValue::Heap(id) = value {
+            vm.heap.dec_ref(id);
+        }
+    }
+}
+
+/// Runs a callable the host queued during `call` / `call_attr`, then drops its ref
+fn call_pending(vm: &mut VM<'_>, callable: HeapId, args: Vec<HostValue>) -> RunResult<Value> {
+    let func = Value::Ref(callable);
+    let evaluated = match host_values_to_args(vm, args) {
+        Ok(arg_values) => vm.evaluate_function(&func, arg_values),
+        Err(err) => {
+            func.drop_with(vm);
+            return Err(run_err_from_monty(err));
+        }
+    };
+    func.drop_with(vm);
+    evaluated.map_err(|error| error.into_python_exception(vm.interns, |_| Some("")).into())
+}
+
+/// Applies pending host calls, releasing the host return value if a nested call fails
+fn finish_dispatched_call(
+    vm: &mut VM<'_>,
+    result: HostValue,
+    pending: Option<(HeapId, Vec<HostValue>)>,
+    replace: Option<(HeapId, Vec<HostValue>)>,
+) -> RunResult<CallResult> {
+    let value = host_value_to_value(vm, result);
+    if let Some((callable, args)) = pending {
+        match call_pending(vm, callable, args) {
+            Ok(nested) => nested.drop_with(vm),
+            Err(err) => {
+                value.drop_with(vm);
+                return Err(err);
+            }
+        }
+    }
+    if let Some((callable, args)) = replace {
+        value.drop_with(vm);
+        return Ok(CallResult::Value(call_pending(vm, callable, args)?));
+    }
+    Ok(CallResult::Value(value))
 }
 
 fn kwargs_key_to_string(vm: &mut VM<'_>, key: Value) -> RunResult<String> {
@@ -1529,7 +1590,7 @@ fn value_to_host(vm: &mut VM<'_>, value: Value) -> RunResult<HostValue> {
 fn boxed_module_function(vm: &VM<'_>, id: HeapId) -> Option<Value> {
     match vm.heap.get(id) {
         HeapData::HostObject(obj) if obj.kind == KIND_BOXED_MODULE_FN => {
-            Some(Value::ModuleFunction(unpack_module_function(obj.data)))
+            unpack_module_function(obj.data).ok().map(Value::ModuleFunction)
         }
         _ => None,
     }
@@ -1537,17 +1598,24 @@ fn boxed_module_function(vm: &VM<'_>, id: HeapId) -> Option<Value> {
 
 fn pack_module_function(mf: ModuleFunctions) -> u64 {
     let bytes = postcard::to_allocvec(&mf).expect("ModuleFunctions packs");
-    assert!(bytes.len() <= 7, "ModuleFunctions postcard encoding grew past 7 bytes");
+    assert!(
+        bytes.len() <= 7,
+        "ModuleFunctions postcard encoding grew past 7 bytes: {}",
+        bytes.len()
+    );
     let mut buf = [0u8; 8];
     buf[0] = bytes.len() as u8;
     buf[1..1 + bytes.len()].copy_from_slice(&bytes);
     u64::from_le_bytes(buf)
 }
 
-fn unpack_module_function(data: u64) -> ModuleFunctions {
+fn unpack_module_function(data: u64) -> Result<ModuleFunctions, String> {
     let buf = data.to_le_bytes();
-    let len = buf[0] as usize;
-    postcard::from_bytes(&buf[1..1 + len]).expect("ModuleFunctions unpacks")
+    let len = usize::from(buf[0]);
+    if len > 7 {
+        return Err(format!("boxed module function length {len} is out of range"));
+    }
+    postcard::from_bytes(&buf[1..1 + len]).map_err(|err| format!("boxed module function is corrupt: {err}"))
 }
 
 fn host_value_to_value(vm: &mut VM<'_>, value: HostValue) -> Value {
@@ -1565,10 +1633,10 @@ fn host_values_to_args(vm: &mut VM<'_>, args: Vec<HostValue>) -> Result<ArgValue
     let mut values: Vec<Value> = args.into_iter().map(|v| host_value_to_value(vm, v)).collect();
     Ok(match values.len() {
         0 => ArgValues::Empty,
-        1 => ArgValues::One(values.pop().unwrap()),
+        1 => ArgValues::One(values.pop().expect("one host arg after the length check")),
         2 => {
-            let b = values.pop().unwrap();
-            let a = values.pop().unwrap();
+            let b = values.pop().expect("second host arg after the length check");
+            let a = values.pop().expect("first host arg after the length check");
             ArgValues::Two(a, b)
         }
         _ => ArgValues::ArgsKargs {
@@ -2043,6 +2111,76 @@ mod tests {
         match embed.call_global("check", vec![]).expect("check") {
             HostValue::Int(42) => {}
             other => panic!("pending replace should yield 42, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn failed_drive_keeps_module_globals() {
+        let host: Rc<RefCell<dyn HostVtable>> = Rc::new(RefCell::new(NoHost));
+        let mut embed =
+            Embed::run_source("n = 1\ndef check():\n    return n\n".into(), "main.py", host).expect("compile/run");
+        let id = embed.alloc_host(HostObject {
+            kind: KIND_ELEMENT,
+            data: 0,
+        });
+        let err = embed.drive(id).expect_err("a host object is not spawnable");
+        assert!(
+            err.to_string().contains("awaitable") || err.to_string().contains("callable"),
+            "unexpected error: {err}"
+        );
+        match embed
+            .call_global("check", vec![])
+            .expect("globals survive a failed drive")
+        {
+            HostValue::Int(1) => {}
+            other => panic!("expected 1, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn failed_host_module_import_is_not_cached() {
+        let extra = vec![HostModuleSource {
+            name: "widgets".into(),
+            filename: "widgets.py".into(),
+            source: "X = 1\nraise RuntimeError('nope')\n".into(),
+        }];
+        let host: Rc<RefCell<dyn HostVtable>> = Rc::new(RefCell::new(NoHost));
+        let mut embed = Embed::run_source_with_modules(
+            "def load():\n    import widgets\n    return widgets.X\n".into(),
+            "main.py",
+            extra,
+            host,
+        )
+        .expect("compile/run");
+        let first = embed.call_global("load", vec![]).expect_err("first import raises");
+        assert!(first.to_string().contains("nope"), "unexpected first error: {first}");
+        let second = embed
+            .call_global("load", vec![])
+            .expect_err("failed import must not stick");
+        assert!(
+            second.to_string().contains("nope"),
+            "cached partial module would return 1, got: {second}"
+        );
+    }
+
+    #[test]
+    fn corrupt_boxed_module_function_is_an_error() {
+        let host: Rc<RefCell<dyn HostVtable>> = Rc::new(RefCell::new(NoHost));
+        let mut embed = Embed::run_source("def check():\n    return 1\n".into(), "main.py", host).expect("compile/run");
+        let id = embed.alloc_host(HostObject {
+            kind: KIND_BOXED_MODULE_FN,
+            data: u64::MAX,
+        });
+        let err = embed
+            .call_callable(id, vec![])
+            .expect_err("corrupt boxed function must not panic");
+        assert!(
+            err.to_string().contains("boxed module function"),
+            "unexpected error: {err}"
+        );
+        match embed.call_global("check", vec![]).expect("globals survive") {
+            HostValue::Int(1) => {}
+            other => panic!("expected 1, got {other:?}"),
         }
     }
 }

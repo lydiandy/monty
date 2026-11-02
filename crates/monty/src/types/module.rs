@@ -118,17 +118,22 @@ impl<'h> HeapReadMut<'h, Module> {
         heap_read_ref_as_field_mut!(self, Module, attrs)
     }
 
-    /// Sets a module attribute, dropping any previous value.
+    /// Sets a module attribute, dropping any previous value
     pub fn set_attr(&self, name: impl Into<crate::intern::StringId>, value: Value, vm: &mut VM<'h>) {
         self.set_attr_key(Value::InternString(name.into()), value, vm);
     }
 
-    /// Sets a module attribute from a heap/intern key, dropping any previous value.
+    /// Sets a module attribute from a heap or intern key, dropping any previous value
+    ///
+    /// Keys are strings, hashing cannot fail, and the growth preflight is skipped
+    /// the same way as [`Module::set_attr`]
     pub fn set_attr_key(&self, name: Value, value: Value, vm: &mut VM<'h>) {
-        match self.attrs_mut().set(name, value, vm) {
-            Ok(Some(old)) => old.drop_with(vm),
-            Ok(None) => {}
-            Err(_) => {}
+        if let Some(old) = self
+            .attrs_mut()
+            .set_without_growth_check(name, value, vm)
+            .expect("module attribute keys are strings, so hashing cannot fail")
+        {
+            old.drop_with(vm);
         }
     }
 }

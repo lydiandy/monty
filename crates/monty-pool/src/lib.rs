@@ -11,7 +11,7 @@ mod worker;
 
 use std::{borrow::Cow, error, fmt, io, num::NonZero, path::PathBuf, process::ExitStatus, thread, time::Duration};
 
-pub use monty_proto::DEFAULT_PRINT_FLUSH_INTERVAL;
+pub use monty_proto::{DEFAULT_PRINT_FLUSH_INTERVAL, pb::HostModuleSource};
 use monty_types::MontyException;
 
 #[cfg(feature = "telemetry")]

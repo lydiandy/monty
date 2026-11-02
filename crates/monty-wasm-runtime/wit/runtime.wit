@@ -309,6 +309,16 @@ interface worker {
         os-policy: option<os-policy>,
     }
 
+    /// Python source registered for this feed, same three fields as proto `HostModuleSource`
+    record host-module-source {
+        /// Import name, `hello` in `import hello`
+        name: string,
+        /// Path used in tracebacks
+        filename: string,
+        /// Module source
+        source: string,
+    }
+
     /// One Python snippet and its host inputs.
     record feed-request {
         code: string,
@@ -319,6 +329,8 @@ interface worker {
         /// Absolute virtual working directory to switch the session to; empty
         /// keeps its current one (`/` until a feed or `os.chdir` changes it).
         cwd: string,
+        /// Host modules compiled with this snippet, empty when the feed has none
+        host-modules: list<host-module-source>,
     }
 
     /// A host-raised exception used to resume a call.

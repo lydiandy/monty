@@ -634,7 +634,7 @@ impl<'h> VM<'h> {
     ///
     /// Similar to exec_get_awaitable's coroutine handling, but for task initialization.
     pub(super) fn init_task_from_coroutine(&mut self, coroutine_id: HeapId) -> Result<(), RunError> {
-        let HeapReadOutput::Coroutine(mut coro) = self.heap.read(coroutine_id) else {
+        let HeapReadOutput::Coroutine(coro) = self.heap.read(coroutine_id) else {
             panic!("task coroutine_id doesn't point to a Coroutine")
         };
 

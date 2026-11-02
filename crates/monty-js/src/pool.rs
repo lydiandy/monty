@@ -32,8 +32,8 @@ use std::{
 
 use monty_pool::{
     telemetry::{TelemetryAdapterHandle, TelemetryContext},
-    Checkout, CheckoutOptions, MountSpec, MountSpecMode, OnPrint, Persistence, Pool, PoolConfig, PoolError,
-    PrintFuture, ReplConfig, ResumeValue, TurnEvent,
+    Checkout, CheckoutOptions, HostModuleSource, MountSpec, MountSpecMode, OnPrint, Persistence, Pool, PoolConfig,
+    PoolError, PrintFuture, ReplConfig, ResumeValue, TurnEvent,
 };
 use monty_types::{
     unstable::{self, NodeId},
@@ -221,6 +221,20 @@ pub struct NativeFeedOptions {
     pub cwd: Option<String>,
     /// Skip type checking for this feed even when the session enables it.
     pub skip_type_check: bool,
+}
+
+/// One host-supplied Python module compiled with this feed
+///
+/// The TypeScript surface is `FeedOptions.hostModules`
+/// This object is only the napi shape of that list, not a second public API
+#[napi(object, js_name = "NativeHostModule")]
+pub struct NativeHostModule {
+    /// Import name (`hello` in `import hello`)
+    pub name: String,
+    /// Path used in tracebacks
+    pub filename: String,
+    /// Module source
+    pub source: String,
 }
 
 /// One mount entry for a feed, pre-validated by the TypeScript `MountDir`.
@@ -545,17 +559,27 @@ impl NativeSession {
         mounts: Vec<ClassInstance<'env, NativeMountDir>>,
         options: NativeFeedOptions,
         on_print: PrintCallback<'env>,
+        host_modules: Option<Vec<NativeHostModule>>,
     ) -> Result<PromiseRaw<'env, Object<'env>>> {
         let inputs = convert_inputs(env, inputs)?;
         let mounts = mount_specs(&mounts)?;
         let NativeFeedOptions { cwd, skip_type_check } = options;
+        let host_modules = host_modules.map(host_module_sources).unwrap_or_default();
         self.run_turn(
             env,
             on_print,
             outcome_fn(move |checkout, on_print| {
                 Box::pin(async move {
                     checkout
-                        .feed_with_cwd(code, inputs, mounts, cwd.as_deref(), skip_type_check, on_print)
+                        .feed_with_host_modules(
+                            code,
+                            inputs,
+                            mounts,
+                            cwd.as_deref(),
+                            skip_type_check,
+                            host_modules,
+                            on_print,
+                        )
                         .await
                 })
             }),
@@ -1402,6 +1426,17 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// # Errors
 ///
 /// Rejects the turn if any mount has been closed.
+fn host_module_sources(modules: Vec<NativeHostModule>) -> Vec<HostModuleSource> {
+    modules
+        .into_iter()
+        .map(|module| HostModuleSource {
+            name: module.name,
+            filename: module.filename,
+            source: module.source,
+        })
+        .collect()
+}
+
 fn mount_specs(mounts: &[ClassInstance<'_, NativeMountDir>]) -> Result<Vec<MountSpec>> {
     mounts
         .iter()

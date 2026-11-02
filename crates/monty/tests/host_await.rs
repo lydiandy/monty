@@ -108,6 +108,9 @@ class App:
     async def tick(self):
         return 1
 
+    async def boom(self):
+        await fetch()
+
     def result(self):
         return last
 "#;
@@ -186,5 +189,33 @@ fn fail_future_is_caught_by_except_exception() {
     match embed.call_method(instance, "result", Vec::new()).expect("result") {
         HostValue::Str(text) => assert_eq!(text, "err:boom"),
         other => panic!("expected text, got {other:?}"),
+    }
+}
+
+#[test]
+fn uncaught_fail_future_keeps_module_globals() {
+    let (mut embed, state, instance) = app();
+    embed.call_method(instance, "boom", Vec::new()).expect("boom starts");
+    assert!(embed.is_parked());
+
+    let err = embed
+        .fail_future(call_id(&state), "boom")
+        .expect_err("uncaught host error");
+    assert!(err.to_string().contains("boom"), "unexpected error: {err}");
+    assert!(!embed.is_parked());
+
+    match embed
+        .call_method(instance, "result", Vec::new())
+        .expect("globals survive")
+    {
+        HostValue::Str(text) => assert_eq!(text, ""),
+        other => panic!("expected empty last, got {other:?}"),
+    }
+    match embed
+        .call_method(instance, "sync", Vec::new())
+        .expect("sync after the failure")
+    {
+        HostValue::Int(7) => {}
+        other => panic!("expected 7, got {other:?}"),
     }
 }

@@ -900,6 +900,30 @@ impl Checkout {
         skip_type_check: bool,
         on_print: OnPrint<'_>,
     ) -> Result<TurnEvent, PoolError> {
+        self.feed_with_host_modules(code, inputs, mounts, cwd, skip_type_check, Vec::new(), on_print)
+            .await
+    }
+
+    /// [`Checkout::feed_with_cwd`] plus host modules compiled with this snippet
+    ///
+    /// Each entry is a top-level module: `import name` loads `source`, and
+    /// `filename` is the path shown in tracebacks
+    /// An empty list is the same call as [`Checkout::feed_with_cwd`]
+    ///
+    /// # Errors
+    /// Same as [`Checkout::feed_with_cwd`]
+    /// A module that fails to compile is a session-preserving
+    /// [`PoolError::Runtime`] from the worker
+    pub async fn feed_with_host_modules(
+        &mut self,
+        code: impl Into<String>,
+        inputs: impl Into<NamedValues>,
+        mounts: Vec<MountSpec>,
+        cwd: Option<&str>,
+        skip_type_check: bool,
+        host_modules: Vec<pb::HostModuleSource>,
+        on_print: OnPrint<'_>,
+    ) -> Result<TurnEvent, PoolError> {
         self.ensure_ready()?;
         if self.pending.is_some() {
             return Err(PoolError::Protocol(
@@ -925,7 +949,7 @@ impl Checkout {
             values: Some(values),
             skip_type_check,
             cwd,
-            host_modules: Default::default(),
+            host_modules: host_modules.into(),
         }));
         let outcome = self.expect_turn(&request, on_print).await;
         // The worker adopts the directory as the request arrives, before the

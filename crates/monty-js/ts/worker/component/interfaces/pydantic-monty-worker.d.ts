@@ -392,12 +392,18 @@ export interface ConfigureRequest {
   printFlushIntervalMs?: number
   osPolicy?: OsPolicy
 }
+export interface HostModuleSource {
+  name: string
+  filename: string
+  source: string
+}
 export interface FeedRequest {
   code: string
   inputs: Array<NamedValue>
   values: Arena
   skipTypeCheck: boolean
   cwd: string
+  hostModules: Array<HostModuleSource>
 }
 export interface RaisedError {
   excType: string

@@ -23,8 +23,8 @@ use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
 
 use insta::assert_snapshot;
 use monty_pool::{
-    MountSpec, MountSpecMode, Pool, PoolConfig, PoolError, PrintFuture, ReplConfig, ResumeValue, TurnEvent,
-    on_print_sync,
+    HostModuleSource, MountSpec, MountSpecMode, Pool, PoolConfig, PoolError, PrintFuture, ReplConfig, ResumeValue,
+    TurnEvent, on_print_sync,
 };
 // only the unix-gated raw-path test forges worker frames
 #[cfg(unix)]
@@ -3036,6 +3036,31 @@ fn tools_stubs(source: &str) -> ResumeValue {
         MontyObject::string("tools"),
         MontyObject::string(source),
     )]))
+}
+
+/// A feed's host module sources are registered, so `import` does not suspend
+#[tokio::test]
+async fn feed_host_modules_are_importable() {
+    let pool = Pool::new(config()).await.unwrap();
+    let mut session = pool.checkout(&ReplConfig::default()).await.unwrap();
+    let event = session
+        .feed_with_host_modules(
+            "import hello\nhello.greet('monty')",
+            vec![],
+            vec![],
+            None,
+            true,
+            vec![HostModuleSource {
+                name: "hello".into(),
+                filename: "hello.py".into(),
+                source: "def greet(name='world'):\n    return f'hello,{name}'\n".into(),
+            }],
+            &mut no_print,
+        )
+        .await
+        .unwrap();
+    assert_eq!(expect_complete(event), MontyObject::string("hello,monty"));
+    session.finish().await.unwrap();
 }
 
 /// Functions on the returned module dispatch as ordinary host functions.

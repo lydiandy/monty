@@ -152,6 +152,7 @@ export class WorkerTransport {
     mounts: readonly unknown[],
     options: { cwd?: string; skipTypeCheck: boolean },
     onPrint: OnPrint,
+    hostModules?: readonly { name: string; filename: string; source: string }[] | null,
   ): Promise<NativeTurn> {
     if (mounts.length > 0) {
       throw new Error('the wasm worker does not support filesystem mounts (browser has no host filesystem)')
@@ -173,6 +174,11 @@ export class WorkerTransport {
           values: encoder.finish(),
           skipTypeCheck: options.skipTypeCheck,
           cwd,
+          hostModules: (hostModules ?? []).map((module) => ({
+            name: module.name,
+            filename: module.filename,
+            source: module.source,
+          })),
         },
       },
       onPrint,

@@ -2149,7 +2149,10 @@ impl<'h> VM<'h> {
         let module_id = self.heap.allocate(HeapData::Module(Box::new(module_obj)));
         host_modules.begin_load(&name, module_id);
 
-        self.enter_run_reentry().map_err(RunError::from)?; // ResourceError -> RunError
+        if let Err(e) = self.enter_run_reentry() {
+            self.abort_host_module_load(host_modules, &name);
+            return Err(RunError::from(e));
+        }
         let mut guard = recursion::RunReentryGuard::new(self);
         let this = &mut *guard;
 
@@ -2160,6 +2163,7 @@ impl<'h> VM<'h> {
             for value in host_globals {
                 value.drop_with(this);
             }
+            this.abort_host_module_load(host_modules, &name);
             return Err(e);
         }
 
@@ -2210,8 +2214,16 @@ impl<'h> VM<'h> {
                 for value in host_globals {
                     value.drop_with(this);
                 }
+                this.abort_host_module_load(host_modules, &name);
                 Err(e)
             }
+        }
+    }
+
+    /// Drops a host module whose body failed, releasing the ref taken at allocation
+    fn abort_host_module_load(&mut self, host_modules: &HostModuleRegistry, name: &str) {
+        if let Some(id) = host_modules.abort_load(name) {
+            self.heap.dec_ref(id);
         }
     }
 

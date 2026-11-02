@@ -123,9 +123,9 @@ export interface FeedOptions {
   /** Skip type checking for this feed even when the session enables it. */
   skipTypeCheck?: boolean
   /**
-   * Host-supplied Python modules compiled with this feed (`LoadHostModule`).
-   * Required for true `import` / `from … import` in the browser wasm worker
-   * (no MountDir). Not a substitute for native `ui`/`motion` HostVtable.
+   * Host-supplied Python modules compiled with this feed
+   * `import` / `from … import` loads these sources on the Node worker and the wasm worker
+   * Not a substitute for native `ui` / `motion` HostVtable
    */
   hostModules?: HostModuleSource[]
 }
