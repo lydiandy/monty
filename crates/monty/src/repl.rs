@@ -463,6 +463,41 @@ impl MontyRepl {
         })
     }
 
+    /// Drops the session's reference to a sandbox callback handle.
+    ///
+    /// A handle obtained from a sandbox function keeps that function alive;
+    /// release it when the host no longer needs to call it. Calling a released
+    /// handle fails with "sandbox function ... is no longer alive".
+    pub fn release_callback(&mut self, id: MontyUuid) {
+        self.heap.release_callback(&id);
+    }
+
+    /// Starts a call to a sandbox function the host holds
+    /// ([`MontyObject::sandbox_function`](monty_types::MontyObject::sandbox_function)).
+    ///
+    /// The callback runs as a normal feed, so it may call host functions and
+    /// suspend; resume the returned [`ReplProgress`] like any other feed.
+    /// Arguments are positional.
+    ///
+    /// # Errors
+    /// Returns a boxed [`ReplStartError`] for a syntax or compile failure, or a
+    /// callback handle the session no longer holds; the session is preserved.
+    pub fn call_callback_start(
+        self,
+        callback: MontyObject,
+        args: Vec<MontyObject>,
+        print: PrintWriter<'_>,
+    ) -> Result<ReplProgress, Box<ReplStartError>> {
+        self.feed_start(
+            "__nsh_callback(*__nsh_args)",
+            vec![
+                ("__nsh_callback".to_owned(), callback),
+                ("__nsh_args".to_owned(), MontyObject::tuple(args)),
+            ],
+            print,
+        )
+    }
+
     /// Calls a Python function defined in the session by name.
     ///
     /// Looks up the function, then executes a synthetic `<python-input-N>`

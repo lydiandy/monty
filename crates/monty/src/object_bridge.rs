@@ -199,6 +199,9 @@ impl GraphExporter {
             Value::InlineString(text) => MontyNode::String(text.as_str().to_owned()),
             Value::InternBytes(bytes_id) => MontyNode::Bytes(interns.get_bytes(*bytes_id).to_owned()),
             Value::InternLongInt(li_id) => MontyNode::BigInt(interns.get_long_int(*li_id).clone()),
+            Value::DefFunction(id) => MontyNode::SandboxFunction {
+                id: vm.heap.callback_uuid(crate::heap::SandboxCallback::Function(*id)),
+            },
             Value::Ref(id) => return self.push_ref(*id, value, vm),
             Value::Builtin(Builtins::Type(t)) => match MontyType::from_internal_static(*t) {
                 Some(ty) => MontyNode::Type(ty),
@@ -510,6 +513,13 @@ impl GraphExporter {
                     name: function.as_str().to_owned(),
                     docstring: None,
                     is_async: function.is_async(),
+                }
+            }
+            // A sandbox callable the host may call back: a closure, a function
+            // with defaults, or a bound method. It crosses as a handle, not a repr.
+            HeapReadOutput::Closure(_) | HeapReadOutput::FunctionDefaults(_) | HeapReadOutput::BoundMethod(_) => {
+                MontyNode::SandboxFunction {
+                    id: vm.heap.callback_uuid(crate::heap::SandboxCallback::Heap(id)),
                 }
             }
             _ => self.repr_node(value, vm),
@@ -886,6 +896,10 @@ fn import_node(
 ) -> Result<Value, InvalidInputError> {
     match node {
         MontyNode::Ellipsis => Ok(Value::Ellipsis),
+        MontyNode::SandboxFunction { id } => vm
+            .heap
+            .callback_value(&id)
+            .ok_or_else(|| InvalidInputError::invalid_type(format!("sandbox function {id} is no longer alive"))),
         MontyNode::NotImplemented => Ok(Value::NotImplemented),
         MontyNode::None => Ok(Value::None),
         MontyNode::Bool(b) => Ok(Value::Bool(b)),
@@ -1061,6 +1075,12 @@ fn import_node(
                 Ok(Value::Ref(id))
             }
             _ if host_classes.contains_key(&class_type) => {
+                // One handle, one Python object: a host instance that already
+                // crossed comes back as itself
+                if let Some(id) = vm.heap.resolve_host_instance(&instance_id) {
+                    vm.heap.inc_ref(id);
+                    return Ok(Value::Ref(id));
+                }
                 let class = &host_classes[&class_type];
                 let pairs = clone_pairs(&attrs, built, vm);
                 let dict = Dict::from_pairs(pairs, vm)
@@ -1074,7 +1094,9 @@ fn import_node(
                     intern_host_class_type(class.name.clone(), class.id, class.is_dataclass, class_attrs, vm)?;
                 let (dict, vm) = dict_guard.into_parts();
                 let hc = HostClass::new(instance_id, class_id, dict);
-                Ok(Value::Ref(vm.heap.allocate(HeapData::HostClass(Box::new(hc)))))
+                let id = vm.heap.allocate(HeapData::HostClass(Box::new(hc)));
+                vm.heap.intern_host_instance(instance_id, id);
+                Ok(Value::Ref(id))
             }
             _ => {
                 let Value::Ref(class_id) = built[class_type.index()] else {

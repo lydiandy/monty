@@ -23,6 +23,8 @@ use serde::{de::Error as _, ser::SerializeStruct};
 use crate::types::TypeRef;
 use crate::{
     asyncio::{Awaiter, ExternalFutureState, GatherState},
+    boundary_uuid::create_uuid,
+    intern::FunctionId,
     types::{ExtFunction, HostClassType, TimeZone, Tuple, decimal::py_context::DecimalSlot},
     value::Value,
 };
@@ -978,6 +980,39 @@ pub(crate) struct Heap {
     /// `boundary_index` because host and sandbox uuids are distinct namespaces.
     /// Weak like the others: cleared on free, rebuilt on restore.
     host_type_index: BTreeMap<MontyUuid, HeapId>,
+    /// Live host class instances by their instance uuid, so one handle that
+    /// crosses twice is one Python object (identity survives a round trip).
+    /// Weak like the other indexes: cleared on free, rebuilt on restore.
+    host_instance_index: BTreeMap<MontyUuid, HeapId>,
+    /// Sandbox callbacks the host holds, by boundary uuid. Strong references:
+    /// a function the host can still call stays alive. Not part of a dump: a
+    /// restored session has no callbacks (the host re-registers them).
+    sandbox_callbacks: BTreeMap<MontyUuid, SandboxCallback>,
+    /// The uuid each registered callback crosses as, so two crossings of the
+    /// same function keep one handle.
+    callback_ids: BTreeMap<CallbackKey, MontyUuid>,
+}
+
+/// One sandbox callable the host holds.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum SandboxCallback {
+    /// A plain `def` with no heap object of its own.
+    Function(FunctionId),
+    /// A heap callable: a closure, a function with defaults, or a bound method.
+    Heap(HeapId),
+}
+
+/// A callback's identity within the session: a function table index or a heap
+/// entry, kept apart by the high bit.
+pub(crate) type CallbackKey = u128;
+
+/// The registry key of a callback: function indices and heap ids do not share
+/// a space, so heap ids get the high bit.
+fn callback_key(callback: SandboxCallback) -> CallbackKey {
+    match callback {
+        SandboxCallback::Function(id) => id.index() as u128,
+        SandboxCallback::Heap(id) => (1u128 << 64) | id.index() as u128,
+    }
 }
 
 impl serde::Serialize for Heap {
@@ -1011,6 +1046,7 @@ impl<'de> serde::Deserialize<'de> for Heap {
             ext_function_cache,
             boundary_index,
             host_type_index,
+            host_instance_index,
         } = restore_entries(&mut entries).map_err(D::Error::custom)?;
         Ok(Self {
             entries,
@@ -1024,6 +1060,9 @@ impl<'de> serde::Deserialize<'de> for Heap {
             ext_function_cache,
             boundary_index,
             host_type_index,
+            host_instance_index,
+            sandbox_callbacks: BTreeMap::new(),
+            callback_ids: BTreeMap::new(),
         })
     }
 }
@@ -1060,6 +1099,11 @@ fn restore_entries(entries: &mut StableHeap<HeapEntry>) -> Result<WeakIndexes, &
             HeapData::HostClassType(ty) => {
                 indexes.host_type_index.insert(ty.type_id(), id);
             }
+            HeapData::HostClass(host) => {
+                indexes
+                    .host_instance_index
+                    .insert(host.instance_id(), id);
+            }
             _ => {}
         }
     }
@@ -1071,6 +1115,7 @@ enum WeakIndexKey {
     ExtFunction { name: Arc<str>, is_async: bool },
     Boundary(MontyUuid),
     HostType(MontyUuid),
+    HostInstance(MontyUuid),
 }
 
 /// The heap's weak (non-owning) indexes, rebuilt from the entries on restore.
@@ -1079,6 +1124,7 @@ struct WeakIndexes {
     ext_function_cache: BTreeMap<Arc<str>, ExtFunctionSlots>,
     boundary_index: BTreeMap<MontyUuid, HeapId>,
     host_type_index: BTreeMap<MontyUuid, HeapId>,
+    host_instance_index: BTreeMap<MontyUuid, HeapId>,
 }
 
 /// The live sync and async `ExtFunction`s sharing one name, each held
@@ -1141,6 +1187,9 @@ impl Heap {
             ext_function_cache: BTreeMap::new(),
             boundary_index: BTreeMap::new(),
             host_type_index: BTreeMap::new(),
+            host_instance_index: BTreeMap::new(),
+            sandbox_callbacks: BTreeMap::new(),
+            callback_ids: BTreeMap::new(),
         };
 
         // The empty-tuple singleton starts with refcount = 1 — that single ref *is* the
@@ -1274,6 +1323,7 @@ impl Heap {
             HeapData::Instance(instance) => instance.uuid().map(WeakIndexKey::Boundary),
             HeapData::Class(class) => class.uuid().map(WeakIndexKey::Boundary),
             HeapData::HostClassType(ty) => Some(WeakIndexKey::HostType(ty.type_id())),
+            HeapData::HostClass(host) => Some(WeakIndexKey::HostInstance(host.instance_id())),
             _ => None,
         }
     }
@@ -1292,7 +1342,12 @@ impl Heap {
             Some(WeakIndexKey::HostType(uuid)) if self.host_type_index.get(&uuid) == Some(&id) => {
                 self.host_type_index.remove(&uuid);
             }
-            Some(WeakIndexKey::Boundary(_) | WeakIndexKey::HostType(_)) | None => {}
+            Some(WeakIndexKey::HostInstance(uuid))
+                if self.host_instance_index.get(&uuid) == Some(&id) =>
+            {
+                self.host_instance_index.remove(&uuid);
+            }
+            Some(WeakIndexKey::Boundary(_) | WeakIndexKey::HostType(_) | WeakIndexKey::HostInstance(_)) | None => {}
         }
     }
 
@@ -1324,11 +1379,66 @@ impl Heap {
         self.boundary_index.get(uuid).copied()
     }
 
+    /// The boundary uuid of a sandbox callable the host holds, generated and
+    /// indexed on its first crossing. The registry keeps a strong reference so
+    /// the host can call it later; two crossings of one function share a uuid.
+    pub(crate) fn callback_uuid(&mut self, callback: SandboxCallback) -> MontyUuid {
+        let key = callback_key(callback);
+        if let Some(uuid) = self.callback_ids.get(&key) {
+            return *uuid;
+        }
+        let uuid = create_uuid();
+        if let SandboxCallback::Heap(id) = callback {
+            self.inc_ref(id);
+        }
+        self.sandbox_callbacks.insert(uuid, callback);
+        self.callback_ids.insert(key, uuid);
+        uuid
+    }
+
+    /// The sandbox callable behind `uuid`, as an owned value, or `None` once
+    /// the session released it.
+    pub(crate) fn callback_value(&self, uuid: &MontyUuid) -> Option<Value> {
+        match self.sandbox_callbacks.get(uuid) {
+            Some(SandboxCallback::Function(id)) => Some(Value::DefFunction(*id)),
+            Some(SandboxCallback::Heap(id)) => {
+                self.inc_ref(*id);
+                Some(Value::Ref(*id))
+            }
+            None => None,
+        }
+    }
+
+    /// Drops the host's reference to a callback.
+    pub(crate) fn release_callback(&mut self, uuid: &MontyUuid) {
+        if let Some(callback) = self.sandbox_callbacks.remove(uuid) {
+            self.callback_ids.remove(&callback_key(callback));
+            if let SandboxCallback::Heap(id) = callback {
+                self.dec_ref(id);
+            }
+        }
+    }
+
     /// The live type object for the host class `uuid`, if the sandbox holds
     /// one; the index owns no reference, so the returned id is borrowed.
     #[must_use]
     pub(crate) fn resolve_host_type(&self, uuid: &MontyUuid) -> Option<HeapId> {
         self.host_type_index.get(uuid).copied()
+    }
+
+    /// The live host class instance that crossed as `uuid`, if any
+    pub(crate) fn resolve_host_instance(&self, uuid: &MontyUuid) -> Option<HeapId> {
+        self.host_instance_index.get(uuid).copied()
+    }
+
+    /// Indexes a freshly allocated host class instance, so the next crossing
+    /// of its uuid hands back this object
+    pub(crate) fn intern_host_instance(&mut self, uuid: MontyUuid, id: HeapId) {
+        let previous = self.host_instance_index.insert(uuid, id);
+        debug_assert!(
+            previous.is_none(),
+            "Heap::intern_host_instance: instance {uuid} already exists"
+        );
     }
 
     /// Allocates and indexes the type object for a host class the sandbox has

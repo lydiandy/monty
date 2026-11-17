@@ -117,6 +117,12 @@ pub enum MontyNode {
         #[serde(default)]
         is_async: bool,
     },
+    /// A sandbox function the host holds and may call back through the
+    /// session's callback API; the id is its boundary uuid.
+    SandboxFunction {
+        /// Boundary uuid of the function's heap entry.
+        id: MontyUuid,
+    },
     /// Output-only fallback: the `repr()` of a value with no other representation.
     Repr(String),
     /// Output-only: a reference back to a container that encloses this node,
@@ -567,6 +573,7 @@ impl MontyGraph {
             MontyNode::TimeZone(_) => "timezone",
             MontyNode::Decimal(_) => "Decimal",
             MontyNode::Exception { .. } => "Exception",
+            MontyNode::SandboxFunction { .. } => "function",
             MontyNode::Path(_) => "PosixPath",
             MontyNode::FileHandle(handle) => handle.mode.type_name(),
             MontyNode::ClassInstance { class_type, .. } => match self.node(*class_type) {
