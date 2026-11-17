@@ -32,30 +32,49 @@ pub(crate) enum PendingLookupEffect {
     /// resumed instruction lands the same `[value, bool]` pair it pushes
     /// when the attribute is answered synchronously.
     MatchAttr,
+    /// A host class's next item in `FOR_ITER`: the served value is pushed as
+    /// the loop variable; `Undefined` ends the loop by dropping the iterator
+    /// and jumping past the body. `offset` is the loop's `FOR_ITER` jump.
+    HostNext { offset: i16 },
 }
 
 impl PendingLookupEffect {
     /// The value to push for the host's answer: `Some(value)` for a served
-    /// attribute, `None` for `Undefined`.
-    pub(crate) fn apply(self, answer: Option<Value>, vm: &mut VM<'_>) -> Value {
+    /// attribute, `None` for `Undefined`. `Self::MatchAttr` pushes its own
+    /// pair and still yields the match flag, so only the other variants use
+    /// the outer `Option`.
+    pub(crate) fn apply(self, answer: Option<Value>, vm: &mut VM<'_>) -> Option<Value> {
         match (self, answer) {
             (Self::HasAttr, Some(value)) => {
                 value.drop_with(vm);
-                Value::Bool(true)
+                Some(Value::Bool(true))
             }
-            (Self::HasAttr, None) => Value::Bool(false),
+            (Self::HasAttr, None) => Some(Value::Bool(false)),
             (Self::Default(default), Some(value)) => {
                 default.drop_with(vm);
-                value
+                Some(value)
             }
-            (Self::Default(default), None) => default,
+            (Self::Default(default), None) => Some(default),
             (Self::MatchAttr, Some(value)) => {
                 vm.push(value);
-                Value::Bool(true)
+                Some(Value::Bool(true))
             }
             (Self::MatchAttr, None) => {
                 vm.push(Value::None);
-                Value::Bool(false)
+                Some(Value::Bool(false))
+            }
+            // The resumed instruction is the one after `FOR_ITER`: a value is
+            // the loop variable; exhaustion drops the iterator and jumps.
+            (Self::HostNext { .. }, Some(value)) => Some(value),
+            (Self::HostNext { offset }, None) => {
+                let iter = vm.pop();
+                iter.drop_with(vm);
+                vm.current_frame.ip = vm
+                    .current_frame
+                    .ip
+                    .checked_add_signed(offset.into())
+                    .expect("jump resulted in negative or overflowing IP");
+                None
             }
         }
     }

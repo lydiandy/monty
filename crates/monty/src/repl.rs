@@ -599,8 +599,9 @@ impl MontyRepl {
                                 Ok(FrameExit::AttrLookup {
                                     effect: Some(effect), ..
                                 }) => {
-                                    let value = effect.apply(None, vm);
-                                    vm.push(value);
+                                    if let Some(value) = effect.apply(None, vm) {
+                                        vm.push(value);
+                                    }
                                     vm.run_external()
                                 }
                                 Ok(exit) => {

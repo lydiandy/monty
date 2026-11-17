@@ -525,8 +525,14 @@ pub(crate) fn resume_lookup(
             effect.drop_with(vm);
             return vm.resume_with_exception(import_from_error(err, name, vm));
         }
-        (LookupAnswer::Value(value), Some(effect)) => effect.apply(Some(value), vm),
-        (LookupAnswer::Undefined, Some(effect)) => effect.apply(None, vm),
+        (LookupAnswer::Value(value), Some(effect)) => match effect.apply(Some(value), vm) {
+            Some(value) => value,
+            None => return vm.run_external(),
+        },
+        (LookupAnswer::Undefined, Some(effect)) => match effect.apply(None, vm) {
+            Some(value) => value,
+            None => return vm.run_external(),
+        },
         (LookupAnswer::Value(value), None) => {
             if let LookupScope::Namespace {
                 namespace_slot,

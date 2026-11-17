@@ -144,7 +144,7 @@ impl CallResult {
             // With no host to answer, `hasattr` and `getattr` see an undefined attribute.
             Self::AttrLookup {
                 effect: Some(effect), ..
-            } => Ok(effect.apply(None, vm)),
+            } => Ok(effect.apply(None, vm).unwrap_or(Value::None)),
             Self::FramePushed => {
                 // Stop both normal returns and exception unwinding before the Rust caller's frame.
                 vm.current_frame_mut().should_return = true;
@@ -154,8 +154,9 @@ impl CallResult {
                         FrameExit::AttrLookup {
                             effect: Some(effect), ..
                         } => {
-                            let value = effect.apply(None, vm);
-                            vm.push(value);
+                            if let Some(value) = effect.apply(None, vm) {
+                                vm.push(value);
+                            }
                         }
                         exit => {
                             let error = vm.unsupported_frame_exit(exit);

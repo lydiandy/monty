@@ -48,8 +48,7 @@ impl HeapId {
     /// The top 32 bits tag an NSH handle, so a uuid from a class or a
     /// module never decodes as one.
     pub const fn uuid(self) -> monty_types::MontyUuid {
-        let value =
-            (0x4E53_4800u128 << 96) | ((self.generation as u128) << 32) | self.index as u128;
+        let value = (0x4E53_4800u128 << 96) | ((self.generation as u128) << 32) | self.index as u128;
         monty_types::MontyUuid::from_u128(value)
     }
 
@@ -201,10 +200,7 @@ impl Arena {
             refs: 1,
             generation: 0,
         });
-        HeapId {
-            index,
-            generation: 0,
-        }
+        HeapId { index, generation: 0 }
     }
 
     pub fn alloc_dict(&self, entries: Vec<(String, Value)>) -> HeapId {
@@ -224,8 +220,11 @@ impl Arena {
     pub fn callback(&self, id: HeapId) -> Option<Callback> {
         let entries = self.entries.borrow();
         match entries.get(id.index as usize) {
-            Some(Entry { stored: Some(Stored::Callback(callback)), generation, .. })
-                if *generation == id.generation => Some(*callback),
+            Some(Entry {
+                stored: Some(Stored::Callback(callback)),
+                generation,
+                ..
+            }) if *generation == id.generation => Some(*callback),
             _ => None,
         }
     }
@@ -242,12 +241,7 @@ impl Arena {
         })
     }
 
-    pub fn module_set_attr(
-        &self,
-        id: HeapId,
-        name: &str,
-        value: Value,
-    ) -> Result<(), String> {
+    pub fn module_set_attr(&self, id: HeapId, name: &str, value: Value) -> Result<(), String> {
         let mut entries = self.entries.borrow_mut();
         let entry = entries
             .get_mut(id.index as usize)
@@ -284,9 +278,7 @@ impl Arena {
                 stored: Some(Stored::Dict(entries)),
                 generation,
                 ..
-            }) if *generation == id.generation => {
-                entries.get(index).map(|(key, _)| Value::Str(key.clone()))
-            }
+            }) if *generation == id.generation => entries.get(index).map(|(key, _)| Value::Str(key.clone())),
             _ => None,
         }
     }
@@ -379,12 +371,7 @@ impl Arena {
         let entries = self.entries.borrow();
         match entries.get(id.index as usize) {
             Some(Entry {
-                stored:
-                    Some(Stored::Module {
-                        name,
-                        package,
-                        attrs,
-                    }),
+                stored: Some(Stored::Module { name, package, attrs }),
                 generation,
                 ..
             }) if *generation == id.generation => Some((name.clone(), *package, attrs.clone())),
@@ -690,12 +677,7 @@ pub trait Dispatch: 'static {
         kwargs: Vec<(String, Value)>,
     ) -> Result<Value, String>;
 
-    fn construct(
-        &self,
-        ctx: &mut dyn HostCtx,
-        name: &str,
-        args: Vec<Value>,
-    ) -> Result<Value, String>;
+    fn construct(&self, ctx: &mut dyn HostCtx, name: &str, args: Vec<Value>) -> Result<Value, String>;
 
     fn create_module(&self, ctx: &mut dyn HostCtx, name: &str) -> Result<Option<HeapId>, String>;
 }

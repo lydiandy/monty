@@ -1100,9 +1100,7 @@ fn restore_entries(entries: &mut StableHeap<HeapEntry>) -> Result<WeakIndexes, &
                 indexes.host_type_index.insert(ty.type_id(), id);
             }
             HeapData::HostClass(host) => {
-                indexes
-                    .host_instance_index
-                    .insert(host.instance_id(), id);
+                indexes.host_instance_index.insert(host.instance_id(), id);
             }
             _ => {}
         }
@@ -1342,9 +1340,7 @@ impl Heap {
             Some(WeakIndexKey::HostType(uuid)) if self.host_type_index.get(&uuid) == Some(&id) => {
                 self.host_type_index.remove(&uuid);
             }
-            Some(WeakIndexKey::HostInstance(uuid))
-                if self.host_instance_index.get(&uuid) == Some(&id) =>
-            {
+            Some(WeakIndexKey::HostInstance(uuid)) if self.host_instance_index.get(&uuid) == Some(&id) => {
                 self.host_instance_index.remove(&uuid);
             }
             Some(WeakIndexKey::Boundary(_) | WeakIndexKey::HostType(_) | WeakIndexKey::HostInstance(_)) | None => {}

@@ -1712,6 +1712,28 @@ impl<'h> VM<'h> {
                 // Iteration - route through exception handling
                 Opcode::GetIter => {
                     let value = self.pop();
+                    // A host class answers `__iter__` through the host, which is
+                    // a suspension like any other; its answer is the iterator.
+                    let host = match &value {
+                        Value::Ref(heap_id) => match self.heap.read(*heap_id) {
+                            HeapReadOutput::HostClass(host) => Some((
+                                host.get(self.heap).instance_id(),
+                                host.get(self.heap).name(self.heap, self.interns).to_owned(),
+                            )),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    if let Some((object_id, _class_name)) = host {
+                        value.drop_with(self);
+                        let call = CallResult::MethodCall {
+                            name: EitherStr::Heap("__iter__".to_owned()),
+                            args: ArgValues::Empty,
+                            object_id,
+                        };
+                        handle_call_result!(self, Ok(call));
+                        continue;
+                    }
                     let iterator = value.py_iter(self).and_then(|call| call.require_synchronous(self));
                     value.drop_with(self);
                     match iterator {
@@ -1735,6 +1757,28 @@ impl<'h> VM<'h> {
                         let call = file.buffer_load_call(self, effect);
                         drop(iter);
                         self.current_frame.ip = self.instruction_ip;
+                        handle_call_result!(self, Ok(call));
+                        continue;
+                    }
+
+                    // A host class's `__next__` is a suspension: the answer is
+                    // the loop variable, `Undefined` ends the loop.
+                    let host = match &iter {
+                        HeapReadOutput::HostClass(host) => Some((
+                            host.get(self.heap).instance_id(),
+                            host.get(self.heap).name(self.heap, self.interns).to_owned(),
+                        )),
+                        _ => None,
+                    };
+                    if let Some((object_id, class_name)) = host {
+                        drop(iter);
+                        let call = CallResult::AttrLookup {
+                            name: EitherStr::Heap("__next__".to_owned()),
+                            class_name,
+                            object_id,
+                            type_object: false,
+                            effect: Some(PendingLookupEffect::HostNext { offset }),
+                        };
                         handle_call_result!(self, Ok(call));
                         continue;
                     }
