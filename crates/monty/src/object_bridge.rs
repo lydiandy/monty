@@ -522,6 +522,10 @@ impl GraphExporter {
                     id: vm.heap.callback_uuid(crate::heap::SandboxCallback::Heap(id)),
                 }
             }
+            // A sandbox class the host holds: `@view` and constructors need it
+            HeapReadOutput::Class(_) => MontyNode::SandboxClass {
+                id: vm.heap.callback_uuid(crate::heap::SandboxCallback::Heap(id)),
+            },
             _ => self.repr_node(value, vm),
         }
     }
@@ -900,6 +904,10 @@ fn import_node(
             .heap
             .callback_value(&id)
             .ok_or_else(|| InvalidInputError::invalid_type(format!("sandbox function {id} is no longer alive"))),
+        MontyNode::SandboxClass { id } => vm
+            .heap
+            .callback_value(&id)
+            .ok_or_else(|| InvalidInputError::invalid_type(format!("sandbox class {id} is no longer alive"))),
         MontyNode::NotImplemented => Ok(Value::NotImplemented),
         MontyNode::None => Ok(Value::None),
         MontyNode::Bool(b) => Ok(Value::Bool(b)),

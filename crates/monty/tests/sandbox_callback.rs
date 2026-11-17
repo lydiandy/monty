@@ -10,19 +10,13 @@ fn complete(progress: ReplProgress) -> (MontyRepl, MontyObject) {
         match progress {
             ReplProgress::Complete { repl, value } => return (repl, value),
             ReplProgress::FunctionCall(call) => {
-                progress = call
-                    .resume(MontyObject::none(), PrintWriter::Stdout)
-                    .expect("resume");
+                progress = call.resume(MontyObject::none(), PrintWriter::Stdout).expect("resume");
             }
             ReplProgress::OsCall(call) => {
-                progress = call
-                    .resume(MontyObject::none(), PrintWriter::Stdout)
-                    .expect("resume");
+                progress = call.resume(MontyObject::none(), PrintWriter::Stdout).expect("resume");
             }
             ReplProgress::NameLookup(call) => {
-                progress = call
-                    .resume(None.into(), PrintWriter::Stdout)
-                    .expect("resume");
+                progress = call.resume(None.into(), PrintWriter::Stdout).expect("resume");
             }
             ReplProgress::ResolveFutures(_) => panic!("unexpected futures"),
         }
@@ -30,11 +24,7 @@ fn complete(progress: ReplProgress) -> (MontyRepl, MontyObject) {
 }
 
 fn repl() -> MontyRepl {
-    MontyRepl::new(
-        "callback.py",
-        ResourceTracker::default(),
-        CompileOptions::default(),
-    )
+    MontyRepl::new("callback.py", ResourceTracker::default(), CompileOptions::default())
 }
 
 #[test]
@@ -56,6 +46,26 @@ fn a_plain_function_crosses_as_a_handle_and_calls_back() {
         .expect("the call");
     let (_repl, value) = complete(progress);
     assert_eq!(value, MontyObject::int(42));
+}
+
+#[test]
+fn a_class_crosses_as_a_handle_and_comes_back() {
+    let mut repl = repl();
+    let class = repl
+        .feed_run(
+            "class Thing:\n    def value(self):\n        return 7\nThing",
+            vec![],
+            PrintWriter::Stdout,
+        )
+        .expect("the class");
+    assert!(
+        class.as_sandbox_class().is_some(),
+        "a sandbox class crosses as a handle: {class}"
+    );
+    let value = repl
+        .feed_run("cls().value()", vec![("cls".to_owned(), class)], PrintWriter::Stdout)
+        .expect("the instance");
+    assert_eq!(value, MontyObject::int(7));
 }
 
 #[test]
@@ -96,11 +106,7 @@ fn a_bound_method_calls_back() {
 
 #[test]
 fn a_callback_can_call_a_host_function_while_suspended() {
-    let mut repl = MontyRepl::new(
-        "callback.py",
-        ResourceTracker::default(),
-        CompileOptions::default(),
-    );
+    let mut repl = MontyRepl::new("callback.py", ResourceTracker::default(), CompileOptions::default());
     // The callback names a host function; `call_callback_start` suspends on it.
     let callback = repl
         .feed_run(
@@ -122,10 +128,7 @@ fn a_callback_can_call_a_host_function_while_suspended() {
             }
             ReplProgress::NameLookup(call) => {
                 progress = call
-                    .resume(
-                        Some(MontyObject::function("add", None)).into(),
-                        PrintWriter::Stdout,
-                    )
+                    .resume(Some(MontyObject::function("add", None)).into(), PrintWriter::Stdout)
                     .expect("resume lookup");
             }
             ReplProgress::FunctionCall(call) => {
@@ -147,25 +150,13 @@ fn a_callback_can_call_a_host_function_while_suspended() {
 
 #[test]
 fn a_callback_handle_can_be_passed_back_in() {
-    let mut repl = MontyRepl::new(
-        "callback.py",
-        ResourceTracker::default(),
-        CompileOptions::default(),
-    );
+    let mut repl = MontyRepl::new("callback.py", ResourceTracker::default(), CompileOptions::default());
     let callback = repl
-        .feed_run(
-            "def identity(x):\n    return x\nidentity",
-            vec![],
-            PrintWriter::Stdout,
-        )
+        .feed_run("def identity(x):\n    return x\nidentity", vec![], PrintWriter::Stdout)
         .expect("the function");
     let id = callback.as_sandbox_function().expect("a handle");
     let back = repl
-        .feed_run(
-            "f",
-            vec![("f".to_owned(), callback.clone())],
-            PrintWriter::Stdout,
-        )
+        .feed_run("f", vec![("f".to_owned(), callback.clone())], PrintWriter::Stdout)
         .expect("the value back");
     assert_eq!(back.as_sandbox_function(), Some(id), "one handle per function");
     assert!(callback.as_sandbox_function().is_some());

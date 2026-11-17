@@ -123,6 +123,11 @@ pub enum MontyNode {
         /// Boundary uuid of the function's heap entry.
         id: MontyUuid,
     },
+    /// A sandbox class the host holds; the id is its boundary uuid.
+    SandboxClass {
+        /// Boundary uuid of the class's heap entry.
+        id: MontyUuid,
+    },
     /// Output-only fallback: the `repr()` of a value with no other representation.
     Repr(String),
     /// Output-only: a reference back to a container that encloses this node,
@@ -574,6 +579,7 @@ impl MontyGraph {
             MontyNode::Decimal(_) => "Decimal",
             MontyNode::Exception { .. } => "Exception",
             MontyNode::SandboxFunction { .. } => "function",
+            MontyNode::SandboxClass { .. } => "type",
             MontyNode::Path(_) => "PosixPath",
             MontyNode::FileHandle(handle) => handle.mode.type_name(),
             MontyNode::ClassInstance { class_type, .. } => match self.node(*class_type) {

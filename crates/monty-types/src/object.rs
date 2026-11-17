@@ -215,6 +215,21 @@ impl MontyObject {
         Self::leaf(MontyNode::SandboxFunction { id })
     }
 
+    /// A sandbox class the host holds; the id is its boundary uuid.
+    #[must_use]
+    pub fn sandbox_class(id: MontyUuid) -> Self {
+        Self::leaf(MontyNode::SandboxClass { id })
+    }
+
+    /// The boundary uuid of a sandbox class this value holds, if it is one.
+    #[must_use]
+    pub fn as_sandbox_class(&self) -> Option<MontyUuid> {
+        match self.graph.node(self.root) {
+            MontyNode::SandboxClass { id } => Some(*id),
+            _ => None,
+        }
+    }
+
     /// The boundary uuid of a sandbox function this value holds, if it is one;
     /// pass it back to the session's callback call API.
     #[must_use]
@@ -831,6 +846,7 @@ impl<'a> ObjectRef<'a> {
             MontyNode::BuiltinFunction(func) => write!(f, "<built-in function {func}>"),
             MontyNode::Function { name, .. } => write!(f, "<function '{name}' external>"),
             MontyNode::SandboxFunction { id } => write!(f, "<function {id}>"),
+            MontyNode::SandboxClass { id } => write!(f, "<class {id}>"),
             // a module's repr names it without listing its attrs, as CPython's does
             MontyNode::Module { name, .. } => write!(f, "<module {}>", StringRepr(name)),
             MontyNode::Repr(s) => write!(f, "Repr({})", StringRepr(s)),
