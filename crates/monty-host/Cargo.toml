@@ -1,0 +1,9 @@
+[package]
+name = "monty-host"
+version = "0.1.0"
+edition = "2024"
+description = "The host value and context API for embedding Monty"
+license = "MIT"
+
+[dependencies]
+monty-types = { path = "../monty-types" }

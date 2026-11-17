@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/monty-host",
     "crates/monty",
     "crates/monty-types",
     "crates/monty-alloc",

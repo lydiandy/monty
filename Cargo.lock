@@ -2564,6 +2564,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "monty-host"
+version = "0.1.0"
+dependencies = [
+ "monty-types",
+]
+
+[[package]]
 name = "monty-js"
 version = "1.6.0"
 dependencies = [
