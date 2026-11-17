@@ -47,14 +47,14 @@ impl HeapId {
     ///
     /// The top 32 bits tag an NSH handle, so a uuid from a class or a
     /// module never decodes as one.
-    pub(crate) const fn uuid(self) -> monty_types::MontyUuid {
+    pub const fn uuid(self) -> monty_types::MontyUuid {
         let value =
             (0x4E53_4800u128 << 96) | ((self.generation as u128) << 32) | self.index as u128;
         monty_types::MontyUuid::from_u128(value)
     }
 
     /// The handle a boundary uuid names, if it is one
-    pub(crate) fn from_uuid(uuid: &monty_types::MontyUuid) -> Option<Self> {
+    pub fn from_uuid(uuid: &monty_types::MontyUuid) -> Option<Self> {
         let value = u128::from_be_bytes(*uuid.as_bytes());
         if value >> 96 != 0x4E53_4800 {
             return None;
@@ -75,6 +75,20 @@ impl fmt::Debug for HeapId {
 /// A sandbox callable the host holds
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Callback(pub(crate) monty_types::MontyUuid);
+
+impl Callback {
+    /// Wraps a boundary callback uuid
+    #[must_use]
+    pub const fn new(id: monty_types::MontyUuid) -> Self {
+        Self(id)
+    }
+
+    /// The boundary uuid
+    #[must_use]
+    pub const fn id(self) -> monty_types::MontyUuid {
+        self.0
+    }
+}
 
 /// A value at the boundary
 #[derive(Clone, Debug, PartialEq)]
@@ -153,17 +167,19 @@ enum Stored {
         attrs: Vec<(String, Value)>,
     },
     Bytes(Vec<u8>),
+    /// A sandbox callback the host holds
+    Callback(Callback),
 }
 
 /// The values one session holds
 #[derive(Default)]
-pub(crate) struct Arena {
+pub struct Arena {
     entries: RefCell<Vec<Entry>>,
     free: RefCell<Vec<u32>>,
 }
 
 impl Arena {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self::default()
     }
 
@@ -191,19 +207,34 @@ impl Arena {
         }
     }
 
-    pub(crate) fn alloc_dict(&self, entries: Vec<(String, Value)>) -> HeapId {
+    pub fn alloc_dict(&self, entries: Vec<(String, Value)>) -> HeapId {
         self.push(Stored::Dict(entries))
     }
 
-    pub(crate) fn alloc_list(&self, items: Vec<Value>) -> HeapId {
+    pub fn alloc_list(&self, items: Vec<Value>) -> HeapId {
         self.push(Stored::List(items))
     }
 
-    pub(crate) fn alloc_object(&self, object: HostObject) -> HeapId {
+    /// Stores a sandbox callback and returns the handle the engine keeps
+    pub fn alloc_callback(&self, callback: Callback) -> HeapId {
+        self.push(Stored::Callback(callback))
+    }
+
+    /// The callback behind a handle, if it is one
+    pub fn callback(&self, id: HeapId) -> Option<Callback> {
+        let entries = self.entries.borrow();
+        match entries.get(id.index as usize) {
+            Some(Entry { stored: Some(Stored::Callback(callback)), generation, .. })
+                if *generation == id.generation => Some(*callback),
+            _ => None,
+        }
+    }
+
+    pub fn alloc_object(&self, object: HostObject) -> HeapId {
         self.push(Stored::Object(object))
     }
 
-    pub(crate) fn alloc_module(&self, name: &str, package: bool) -> HeapId {
+    pub fn alloc_module(&self, name: &str, package: bool) -> HeapId {
         self.push(Stored::Module {
             name: name.to_owned(),
             package,
@@ -211,7 +242,7 @@ impl Arena {
         })
     }
 
-    pub(crate) fn module_set_attr(
+    pub fn module_set_attr(
         &self,
         id: HeapId,
         name: &str,
@@ -232,7 +263,7 @@ impl Arena {
         }
     }
 
-    pub(crate) fn dict_get(&self, id: HeapId, key: &str) -> Option<Value> {
+    pub fn dict_get(&self, id: HeapId, key: &str) -> Option<Value> {
         let entries = self.entries.borrow();
         match entries.get(id.index as usize) {
             Some(Entry {
@@ -246,7 +277,7 @@ impl Arena {
         }
     }
 
-    pub(crate) fn dict_key_at(&self, id: HeapId, index: usize) -> Option<Value> {
+    pub fn dict_key_at(&self, id: HeapId, index: usize) -> Option<Value> {
         let entries = self.entries.borrow();
         match entries.get(id.index as usize) {
             Some(Entry {
@@ -260,7 +291,7 @@ impl Arena {
         }
     }
 
-    pub(crate) fn dict_set(&self, id: HeapId, key: &str, value: Value) -> Result<(), String> {
+    pub fn dict_set(&self, id: HeapId, key: &str, value: Value) -> Result<(), String> {
         let mut entries = self.entries.borrow_mut();
         let entry = entries
             .get_mut(id.index as usize)
@@ -280,7 +311,7 @@ impl Arena {
         }
     }
 
-    pub(crate) fn dict_len(&self, id: HeapId) -> Option<usize> {
+    pub fn dict_len(&self, id: HeapId) -> Option<usize> {
         let entries = self.entries.borrow();
         match entries.get(id.index as usize) {
             Some(Entry {
@@ -292,7 +323,7 @@ impl Arena {
         }
     }
 
-    pub(crate) fn list_get(&self, id: HeapId, index: usize) -> Option<Value> {
+    pub fn list_get(&self, id: HeapId, index: usize) -> Option<Value> {
         let entries = self.entries.borrow();
         match entries.get(id.index as usize) {
             Some(Entry {
@@ -304,7 +335,7 @@ impl Arena {
         }
     }
 
-    pub(crate) fn list_len(&self, id: HeapId) -> Option<usize> {
+    pub fn list_len(&self, id: HeapId) -> Option<usize> {
         let entries = self.entries.borrow();
         match entries.get(id.index as usize) {
             Some(Entry {
@@ -316,11 +347,11 @@ impl Arena {
         }
     }
 
-    pub(crate) fn alloc_bytes(&self, bytes: Vec<u8>) -> HeapId {
+    pub fn alloc_bytes(&self, bytes: Vec<u8>) -> HeapId {
         self.push(Stored::Bytes(bytes))
     }
 
-    pub(crate) fn bytes_get(&self, id: HeapId) -> Option<Vec<u8>> {
+    pub fn bytes_get(&self, id: HeapId) -> Option<Vec<u8>> {
         let entries = self.entries.borrow();
         match entries.get(id.index as usize) {
             Some(Entry {
@@ -332,7 +363,7 @@ impl Arena {
         }
     }
 
-    pub(crate) fn object(&self, id: HeapId) -> Option<HostObject> {
+    pub fn object(&self, id: HeapId) -> Option<HostObject> {
         let entries = self.entries.borrow();
         match entries.get(id.index as usize) {
             Some(Entry {
@@ -344,7 +375,7 @@ impl Arena {
         }
     }
 
-    pub(crate) fn module(&self, id: HeapId) -> Option<(String, bool, Vec<(String, Value)>)> {
+    pub fn module(&self, id: HeapId) -> Option<(String, bool, Vec<(String, Value)>)> {
         let entries = self.entries.borrow();
         match entries.get(id.index as usize) {
             Some(Entry {
@@ -361,7 +392,7 @@ impl Arena {
         }
     }
 
-    pub(crate) fn is_list(&self, id: HeapId) -> bool {
+    pub fn is_list(&self, id: HeapId) -> bool {
         let entries = self.entries.borrow();
         matches!(
             entries.get(id.index as usize),
@@ -369,7 +400,7 @@ impl Arena {
         )
     }
 
-    pub(crate) fn is_dict(&self, id: HeapId) -> bool {
+    pub fn is_dict(&self, id: HeapId) -> bool {
         let entries = self.entries.borrow();
         matches!(
             entries.get(id.index as usize),
@@ -377,7 +408,7 @@ impl Arena {
         )
     }
 
-    pub(crate) fn inc_ref(&self, id: HeapId) {
+    pub fn inc_ref(&self, id: HeapId) {
         let mut entries = self.entries.borrow_mut();
         if let Some(entry) = entries
             .get_mut(id.index as usize)
@@ -387,7 +418,7 @@ impl Arena {
         }
     }
 
-    pub(crate) fn dec_ref(&self, id: HeapId) {
+    pub fn dec_ref(&self, id: HeapId) {
         let mut entries = self.entries.borrow_mut();
         let Some(entry) = entries
             .get_mut(id.index as usize)
@@ -410,7 +441,7 @@ impl Arena {
             Stored::List(items) => items.clone(),
             Stored::Dict(entries) => entries.iter().map(|(_, value)| value.clone()).collect(),
             Stored::Module { attrs, .. } => attrs.iter().map(|(_, value)| value.clone()).collect(),
-            Stored::Object(_) | Stored::Bytes(_) => Vec::new(),
+            Stored::Object(_) | Stored::Bytes(_) | Stored::Callback(_) => Vec::new(),
         };
         for child in children {
             if let Value::Heap(child) = child {
@@ -513,6 +544,14 @@ pub trait HostCtx {
     fn host_object(&self, _id: HeapId) -> Option<HostObject> {
         None
     }
+    /// Stores a sandbox callback; the host keeps the returned handle
+    fn alloc_callback(&self, _callback: Callback) -> HeapId {
+        unreachable!("this host holds no callbacks")
+    }
+    /// The callback behind a handle
+    fn callback(&self, _id: HeapId) -> Option<Callback> {
+        None
+    }
     fn inc_ref(&self, _id: HeapId) {}
     fn dec_ref(&self, _id: HeapId) {}
     fn bytes_get(&self, _id: HeapId) -> Option<Vec<u8>> {
@@ -586,6 +625,12 @@ impl HostCtx for Arena {
 
     fn host_object(&self, id: HeapId) -> Option<HostObject> {
         self.object(id)
+    }
+    fn alloc_callback(&self, callback: Callback) -> HeapId {
+        self.alloc_callback(callback)
+    }
+    fn callback(&self, id: HeapId) -> Option<Callback> {
+        self.callback(id)
     }
 
     fn inc_ref(&self, id: HeapId) {
