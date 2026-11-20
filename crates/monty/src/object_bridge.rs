@@ -487,12 +487,11 @@ impl GraphExporter {
                     MontyNode::Repr(m.get(vm.heap).repr(vm.interns))
                 }
             }
-            HeapReadOutput::Coroutine(coro) => {
-                let func_id = coro.get(vm.heap).func_id;
-                let func = vm.interns.get_function(func_id);
-                let name = vm.interns.get_str(func.name.name_id);
-                MontyNode::Repr(format!("<coroutine object {name}>"))
-            }
+            // A coroutine crosses as a handle too: the host starts it with
+            // `await` in a feed of its own (`create_task`).
+            HeapReadOutput::Coroutine(_) => MontyNode::SandboxFunction {
+                id: vm.heap.callback_uuid(crate::heap::SandboxCallback::Heap(id)),
+            },
             HeapReadOutput::GatherFuture(gather) => {
                 MontyNode::Repr(format!("<gather({})>", gather.get(vm.heap).item_count()))
             }
