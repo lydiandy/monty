@@ -268,6 +268,11 @@ impl<'a> Decoder<'a, '_> {
             // function nodes belong to the name-lookup protocol; one reaching
             // an output value decodes to its name
             MontyNode::Function { name, .. } => Ok(PyString::new(py, name).into_any().unbind()),
+            // sandbox handles belong to a host's own sandbox; one reaching an
+            // output value is shown as its boundary id
+            MontyNode::SandboxFunction { id } | MontyNode::SandboxClass { id } => {
+                Ok(PyString::new(py, &id.to_string()).into_any().unbind())
+            }
         }
     }
 

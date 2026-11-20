@@ -338,6 +338,8 @@ fn node_into_component(node: MontyNode) -> ValueNode {
             attrs: raw_pairs(class.attrs),
         }),
         MontyNode::BuiltinFunction(value) => ValueNode::BuiltinFunction(value.to_string()),
+        MontyNode::SandboxFunction { id } => ValueNode::Repr(format!("<sandbox function {id}>")),
+        MontyNode::SandboxClass { id } => ValueNode::Repr(format!("<sandbox class {id}>")),
         MontyNode::Path(value) => ValueNode::Path(value),
         MontyNode::Decimal(value) => ValueNode::Decimal(value),
         MontyNode::FileHandle(value) => ValueNode::FileHandle(FileHandleNode {

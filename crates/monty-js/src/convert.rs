@@ -185,6 +185,13 @@ fn decode_node<'e>(
         // Function objects are internal to the name lookup protocol and should not normally
         // appear as final output values. If they do, represent as a string with the function name.
         MontyNode::Function { name, .. } => env.create_string(name)?.into_unknown(env),
+        // Sandbox handles exist only between a host and its own sandbox.
+        MontyNode::SandboxFunction { id } => env
+            .create_string(&format!("<sandbox function {id}>"))?
+            .into_unknown(env),
+        MontyNode::SandboxClass { id } => env
+            .create_string(&format!("<sandbox class {id}>"))?
+            .into_unknown(env),
     }
 }
 

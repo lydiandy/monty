@@ -341,6 +341,10 @@ mod tag {
     pub const COMPLEX: u32 = 31;
     pub const MODULE: u32 = 32;
     pub const DECIMAL: u32 = 33;
+    /// A sandbox function or class handle (`monty-proto` never sends one:
+    /// they exist only between a host and its own sandbox).
+    pub const SANDBOX_FUNCTION: u32 = 34;
+    pub const SANDBOX_CLASS: u32 = 35;
 }
 
 // ============================================================================
@@ -488,6 +492,12 @@ fn encode_node(node: &MontyNode, buf: &mut impl BufMut) {
         }
         MontyNode::Repr(r) => encoding::string::encode(tag::REPR, r, buf),
         MontyNode::Cycle(placeholder) => encoding::string::encode(tag::CYCLE, placeholder, buf),
+        MontyNode::SandboxFunction { id } => {
+            encoding::message::encode(tag::SANDBOX_FUNCTION, &uuid_to_pb(id), buf)
+        }
+        MontyNode::SandboxClass { id } => {
+            encoding::message::encode(tag::SANDBOX_CLASS, &uuid_to_pb(id), buf)
+        }
     }
 }
 
@@ -546,6 +556,12 @@ fn node_len(node: &MontyNode) -> usize {
         } => submessage_len(tag::FUNCTION, function_len(name, docstring.as_deref(), *is_async)),
         MontyNode::Repr(r) => encoding::string::encoded_len(tag::REPR, r),
         MontyNode::Cycle(placeholder) => encoding::string::encoded_len(tag::CYCLE, placeholder),
+        MontyNode::SandboxFunction { id } => {
+            encoding::message::encoded_len(tag::SANDBOX_FUNCTION, &uuid_to_pb(id))
+        }
+        MontyNode::SandboxClass { id } => {
+            encoding::message::encoded_len(tag::SANDBOX_CLASS, &uuid_to_pb(id))
+        }
     }
 }
 

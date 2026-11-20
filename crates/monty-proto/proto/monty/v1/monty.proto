@@ -117,6 +117,10 @@ message MontyNode {
     // "-NaN12", "Infinity". Carried as text; whoever builds a Decimal from it
     // parses it as Decimal(text) and rejects malformed text there.
     string decimal = 33;
+    // Sandbox handles: a host's own function or class, never sent by a pool
+    // (a host and its sandbox exchange them in process).
+    Uuid sandbox_function = 34;
+    Uuid sandbox_class = 35;
   }
 }
 
